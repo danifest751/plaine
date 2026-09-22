@@ -5,6 +5,7 @@ pub mod cpu;
 pub mod pads;
 pub mod topo;
 
+use crate::client::work;
 use crate::client::Args;
 use pads::Ask;
 
@@ -199,6 +200,15 @@ fn resolve(
     };
     if p.threads == Some(0) {
         notes.push("--threads 0 means one worker".into());
+    }
+    if client.threads > work::MAX_WORKERS {
+        let asked = client.threads;
+        client.threads = work::MAX_WORKERS;
+        notes.push(format!(
+            "{asked} workers asked for, {} used: a worker owns one of {} nonce lanes, and              workers past that repeat an earlier lane's nonces, which the server counts as              duplicate shares and bans for",
+            work::MAX_WORKERS,
+            work::MAX_WORKERS
+        ));
     }
 
     let action = if p.print_topology == Some(true) {
@@ -613,6 +623,13 @@ mod tests {
         parse(&argv, &mut Vec::new())
     }
 
+    // Same, but keeps the notes: some settings are adjusted rather than refused, and
+    // then the note is the only thing that tells the operator what happened.
+    fn args_with(v: &[&str], notes: &mut Vec<String>) -> Result<Options, String> {
+        let argv: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+        parse(&argv, notes)
+    }
+
     #[test]
     fn zero_config_is_one_token() {
         let u = ok("plne1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
@@ -703,7 +720,36 @@ mod tests {
     }
 
     #[test]
-    fn threads_and_affinity_conflict() {
+    fn more_workers_than_nonce_lanes_are_capped() {
+        // A worker owns one of 2^THREAD_BITS lanes. Ask for more and worker
+        // MAX_WORKERS + k walks lane k's nonces exactly, which a server scores as
+        // duplicate shares: +25 banscore each, banned after four. Dual-socket parts
+        // with more than 256 threads exist and available_parallelism is the default,
+        // so the cap cannot just be documented.
+        let mut notes = Vec::new();
+        let o = args_with(
+            &["plne1abc", "--threads", &(work::MAX_WORKERS + 48).to_string()],
+            &mut notes,
+        )
+        .expect("an oversized thread count is capped, not refused");
+        assert_eq!(o.client.threads, work::MAX_WORKERS);
+        assert!(
+            notes.iter().any(|n| n.contains("duplicate shares")),
+            "the cap has to say why, not silently drop workers: {notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_thread_count_inside_the_lane_space_is_left_alone() {
+        for n in [1usize, 2, 16, work::MAX_WORKERS - 1, work::MAX_WORKERS] {
+            let o = args(&["plne1abc", "--threads", &n.to_string()]).expect("legal");
+            assert_eq!(o.client.threads, n, "{n} workers fit and must not be touched");
+        }
+    }
+
+    #[test]
+fn threads_and_affinity_conflict() {
+
         let e = args(&["plne1abc", "--threads", "4", "--cpu-affinity", "0-3"]).unwrap_err();
         assert!(e.contains("--threads"), "{e}");
         assert!(e.contains("--cpu-affinity"), "{e}");
