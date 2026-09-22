@@ -373,7 +373,13 @@ fn report(
     let pages = Summary::of(w.iter().map(|x| x.pages));
     println!("    page size      {}", page_line(b.pages, pages, cpu::page_size()));
     if pages.huge() < pages.total() {
-        println!("                   {}", cpu::huge_pages().state);
+        // Prefer what the allocator actually reported. huge_pages().state is a static
+        // explanation that names the privilege, and on a machine that holds it and
+        // failed for another reason that line sends the reader somewhere useless.
+        match crate::pad::last_note() {
+            Some(note) => println!("                   {note}"),
+            None => println!("                   {}", cpu::huge_pages().state),
+        }
     }
     println!(
         "    scratchpad     64 KiB per nonce x {BATCH} in flight = {} MiB per thread, \

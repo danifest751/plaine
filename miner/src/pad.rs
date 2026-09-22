@@ -167,6 +167,17 @@ fn field(s: Summary) -> String {
     format!("pads {} {}/{}", s.tag(), s.huge(), s.total())
 }
 
+/// Why the last mapping got the page size it got, in the OS's own words.
+///
+/// Callers that report page size should prefer this over a canned explanation. The
+/// stock advice names SeLockMemoryPrivilege, which is simply wrong whenever the right
+/// is already held and the mapping failed for some other reason - on Windows,
+/// ERROR_NO_SYSTEM_RESOURCES from physical fragmentation is the common one, and it
+/// sends the reader to secpol.msc for nothing.
+pub fn last_note() -> Option<&'static str> {
+    NOTE.get().map(|s| s.as_str()).filter(|s| !s.is_empty())
+}
+
 pub fn log_startup(verbose: bool) -> bool {
     if LOGGED.swap(true, Ordering::Relaxed) {
         return false;
@@ -958,7 +969,23 @@ mod tests {
     }
 
     #[test]
-    fn page_report_makes_no_false_claim() {
+    fn the_allocator_says_why_it_got_the_page_size_it_got() {
+        // Mapping a region records a note. Reporting code prefers it over a canned
+        // explanation, because the canned one names SeLockMemoryPrivilege and is wrong
+        // in the two commonest cases: the right is held and the allocation failed for
+        // another reason, or huge pages were never asked for.
+        let _pads = Pads::new(1, false).expect("one ordinary-page pad always maps");
+        let note = last_note().expect("a mapping must record why it got what it got");
+        assert!(!note.trim().is_empty(), "an empty note explains nothing");
+        assert!(
+            !note.contains("SeLockMemoryPrivilege"),
+            "--no-huge-pages did not fail on a privilege, so the note must not blame one: {note}"
+        );
+    }
+
+    #[test]
+fn page_report_makes_no_false_claim() {
+
         let pads = Pads::new(BATCH, true).expect("pads");
         let now = observed_now();
         assert!(now.total() >= 1);
