@@ -16,6 +16,15 @@ pub struct Msg {
     pub error_code: Option<u64>,
     pub error_msg: Option<String>,
     pub result_true: bool,
+    /// `"result"` was an object, e.g. `{"status":"OK"}`. Stratum v1 has three spellings
+    /// of an accepted share - `true`, an object, or simply `error: null` - and a client
+    /// that only knows the first cannot read a pool that uses another. Before this arm
+    /// existed the object fell through to the number branch, the whole line failed to
+    /// parse and was dropped, so an accepted share counted as neither accepted nor
+    /// rejected and its id stayed in `submits` forever.
+    pub result_object: bool,
+    /// `"result"` was literally `false`: a refusal with no error object attached.
+    pub result_false: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,11 +91,18 @@ pub fn parse(line: &str) -> Option<Msg> {
             "method" => msg.method = Some(p.string()?),
             "params" | "result" => match p.byte()? {
                 b'[' => msg.args = p.array()?,
+                b'{' => {
+                    p.skip_value()?;
+                    msg.result_object = true;
+                }
                 b't' => {
                     p.lit("true")?;
                     msg.result_true = true;
                 }
-                b'f' => p.lit("false")?,
+                b'f' => {
+                    p.lit("false")?;
+                    msg.result_false = true;
+                }
                 b'n' => p.lit("null")?,
                 b'"' => msg.args = vec![Owned::Str(p.string()?)],
                 _ => {
@@ -482,5 +498,70 @@ mod tests {
         assert_eq!(hex(&out), "deadbeef");
         assert!(!unhex("deadbee", &mut out));
         assert!(!unhex("deadbeeg", &mut out));
+    }
+
+}
+
+#[cfg(test)]
+mod interop_tests {
+    use super::*;
+
+    fn msg(line: &str) -> Msg {
+        parse(line).expect("this is a line a real pool sends")
+    }
+
+    #[test]
+    fn an_object_result_parses_instead_of_killing_the_line() {
+        // rplant.xyz answers an accepted share with an object. This used to fall through
+        // to the number branch, fail, and drop the whole line: the share counted as
+        // neither accepted nor rejected and its id leaked in the pending set.
+        let m = msg(r#"{"id":3,"result":{"status":"OK"},"error":null}"#);
+        assert_eq!(m.id, Some(3));
+        assert!(m.result_object, "an object result has to be seen as one");
+        assert!(!m.is_error);
+        assert!(!m.result_false);
+        assert!(!m.result_true, "it is not the literal true, and must not pretend to be");
+    }
+
+    #[test]
+    fn a_nested_object_result_parses_too() {
+        let m = msg(r#"{"id":9,"result":{"status":"OK","extra":{"a":[1,2,{"b":null}]}},"error":null}"#);
+        assert_eq!(m.id, Some(9));
+        assert!(m.result_object);
+        assert!(!m.is_error);
+    }
+
+    #[test]
+    fn the_three_spellings_of_yes_and_the_two_of_no() {
+        for yes in [
+            r#"{"id":1,"result":true,"error":null}"#,
+            r#"{"id":1,"result":{"status":"OK"},"error":null}"#,
+            r#"{"id":1,"result":null,"error":null}"#,
+        ] {
+            let m = msg(yes);
+            assert!(!(m.is_error || m.result_false), "{yes} is an acceptance");
+        }
+        for no in [
+            r#"{"id":1,"result":null,"error":[21,"stale share"]}"#,
+            r#"{"id":1,"result":false,"error":null}"#,
+        ] {
+            let m = msg(no);
+            assert!(m.is_error || m.result_false, "{no} is a refusal");
+        }
+    }
+
+    #[test]
+    fn an_error_array_still_carries_its_code_and_text() {
+        let m = msg(r#"{"id":4,"result":null,"error":[21,"stale share"]}"#);
+        assert!(m.is_error);
+        assert_eq!(m.error_code, Some(21));
+        assert_eq!(m.error_msg.as_deref(), Some("stale share"));
+    }
+
+    #[test]
+    fn a_real_subscribe_reply_still_decodes() {
+        let m = msg(r#"{"id":1,"result":[["mining.notify","mining.set_target"],"000000b9",4],"error":null}"#);
+        assert_eq!(m.str_at(1), Some("000000b9"), "the extranonce1 is read as written");
+        assert_eq!(m.num_at(2), Some(4), "four rollable bytes: the pool sub-slices");
     }
 }

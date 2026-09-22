@@ -322,9 +322,19 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
                     json::hex(&sol.pow_hash)
                 );
             }
+            // Echo the server's own spelling of the job id, never a reformatted one.
+            // The fallback cannot normally fire: submittable() just said this job is
+            // live or inside its grace, and both keep the string.
+            let fallback;
+            let job_id_hex = match jobs.hex_of(sol.job_id) {
+                Some(h) => h,
+                None => {
+                    fallback = format!("{:08x}", sol.job_id);
+                    &fallback
+                }
+            };
             let msg = format!(
-                "{{\"id\":{next_id},\"method\":\"mining.submit\",\"params\":[{login_json},\"{:08x}\",\"{}\"]}}",
-                sol.job_id,
+                "{{\"id\":{next_id},\"method\":\"mining.submit\",\"params\":[{login_json},\"{job_id_hex}\",\"{}\"]}}",
                 work::nonce_hex(sol.nonce)
             );
             submits.insert(next_id);
@@ -422,7 +432,7 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
                 };
                 let clean = msg.bool_at(3).unwrap_or(false);
                 let target = shared.job().map(|j| j.target).unwrap_or([0xff; 32]);
-                jobs.notify(job_id, clean);
+                jobs.notify(job_id, job_hex, clean);
                 shared.publish(JobView {
                     job_id,
                     job_id_hex: job_hex.to_string(),
@@ -526,7 +536,7 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
                     next_id += 1;
                     last_out_at = Instant::now();
                 } else if msg.id == Some(authorize_id) && !authorized {
-                    if msg.is_error || !msg.result_true {
+                    if msg.is_error || msg.result_false || !(msg.result_true || msg.result_object) {
                         break Ended::Retry(
                             Ladder::Authorization,
                             format!(
@@ -582,7 +592,11 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
                     }
                     pad::log_startup(args.verbose);
                 } else if submits.remove(&msg.id.unwrap_or(u64::MAX)) {
-                    if msg.is_error || !msg.result_true {
+                    // Accepted unless the server actually said no. Stratum v1 spells yes
+                    // as `result:true`, as `result:{"status":"OK"}` (rplant.xyz), and as
+                    // a bare `error:null`; only an error object or a literal `false` is
+                    // a refusal.
+                    if msg.is_error || msg.result_false {
                         totals.rejected += 1;
                         eprintln!(
                             "plaine-miner: share rejected {} {}",
@@ -617,20 +631,34 @@ fn retarget(shared: &Arc<Shared>, target: [u8; 32]) {
     }
 }
 
-#[derive(Debug, Default)]
+/// A job id as the server spelled it, next to the u32 the miner sorts by.
+///
+/// Both halves are needed. The number is what workers and `Solution` carry, but a
+/// stratum job id is an opaque string and `mining.submit` has to echo it back byte for
+/// byte. Reformatting it - "2341" parsed and re-emitted as "00002341" - hands the server
+/// an id it never issued. The node pads its own ids to eight hex digits, so that bug is
+/// invisible against it and fatal against a pool that does not: rplant.xyz sends "2341"
+/// and answered every reformatted submit with error 21, 0 accepted out of 35.
+#[derive(Debug, Clone)]
+struct JobId {
+    id: u32,
+    hex: String,
+}
+
+#[derive(Default)]
 struct JobTrack {
-    live: Vec<u32>,
-    displaced: Option<(u32, Instant)>,
+    live: Vec<JobId>,
+    displaced: Option<(JobId, Instant)>,
     newest: Option<u32>,
 }
 
 impl JobTrack {
-    fn notify(&mut self, job_id: u32, clean: bool) {
+    fn notify(&mut self, job_id: u32, hex: &str, clean: bool) {
         if clean {
-            self.displaced = self.live.last().copied().map(|id| (id, Instant::now()));
+            self.displaced = self.live.last().cloned().map(|j| (j, Instant::now()));
             self.live.clear();
         }
-        self.live.push(job_id);
+        self.live.push(JobId { id: job_id, hex: hex.to_string() });
 
         while self.live.len() > work::JOB_SLOTS {
             self.live.remove(0);
@@ -639,10 +667,21 @@ impl JobTrack {
     }
 
     fn submittable(&self, job_id: u32) -> bool {
-        if self.live.contains(&job_id) {
+        if self.live.iter().any(|j| j.id == job_id) {
             return true;
         }
-        matches!(self.displaced, Some((id, at)) if id == job_id && at.elapsed() < work::STALE_CREDIT_GRACE)
+        matches!(&self.displaced, Some((j, at)) if j.id == job_id && at.elapsed() < work::STALE_CREDIT_GRACE)
+    }
+
+    /// The server's own spelling of this job id, for `mining.submit` to echo.
+    fn hex_of(&self, job_id: u32) -> Option<&str> {
+        if let Some(j) = self.live.iter().find(|j| j.id == job_id) {
+            return Some(&j.hex);
+        }
+        match &self.displaced {
+            Some((j, _)) if j.id == job_id => Some(&j.hex),
+            _ => None,
+        }
     }
 }
 
@@ -974,10 +1013,39 @@ mod tests {
     }
 
     #[test]
-    fn clean_keeps_displaced_job_for_grace() {
+    fn an_unpadded_job_id_comes_back_exactly_as_sent() {
+        // rplant.xyz issues "2341", not "00002341". Parsing it to a u32 and re-emitting
+        // it padded hands the server an id it never issued; it answered every one of 35
+        // such submits with error 21 and accepted none.
         let mut j = JobTrack::default();
-        j.notify(1, true);
-        j.notify(2, true);
+        for hex in ["2341", "00002341", "a", "FFFFFFFF", "0"] {
+            let id = u32::from_str_radix(hex, 16).expect("test ids are hex");
+            j.notify(id, hex, true);
+            assert!(j.submittable(id));
+            assert_eq!(
+                j.hex_of(id),
+                Some(hex),
+                "the submit must echo the server's own spelling of {hex:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_displaced_job_keeps_its_spelling_through_the_grace() {
+        let mut j = JobTrack::default();
+        j.notify(0x2341, "2341", true);
+        j.notify(0x2342, "2342", true);
+        assert_eq!(j.hex_of(0x2341), Some("2341"), "a job inside its grace is still submittable");
+        assert_eq!(j.hex_of(0x2342), Some("2342"));
+        assert_eq!(j.hex_of(0x9999), None);
+    }
+
+    #[test]
+fn clean_keeps_displaced_job_for_grace() {
+
+        let mut j = JobTrack::default();
+        j.notify(1, &format!("{:08x}", 1), true);
+        j.notify(2, &format!("{:08x}", 2), true);
         assert!(j.submittable(2), "the current job");
         assert!(j.submittable(1), "displaced by a clean, still credited");
         assert!(!j.submittable(99), "never served");
@@ -986,15 +1054,15 @@ mod tests {
     #[test]
     fn jobs_since_clean_stay_submittable() {
         let mut j = JobTrack::default();
-        j.notify(10, true);
+        j.notify(10, &format!("{:08x}", 10), true);
         for id in 11..=13 {
-            j.notify(id, false);
+            j.notify(id, &format!("{:08x}", id), false);
         }
         for id in 10..=13 {
             assert!(j.submittable(id), "job {id} is still live on the server");
         }
 
-        j.notify(14, false);
+        j.notify(14, &format!("{:08x}", 14), false);
         assert!(!j.submittable(10), "rotated out of a {}-slot ring", work::JOB_SLOTS);
         assert!(j.submittable(14));
     }
@@ -1002,10 +1070,10 @@ mod tests {
     #[test]
     fn clean_retires_older_jobs() {
         let mut j = JobTrack::default();
-        j.notify(1, true);
-        j.notify(2, false);
-        j.notify(3, false);
-        j.notify(4, true);
+        j.notify(1, &format!("{:08x}", 1), true);
+        j.notify(2, &format!("{:08x}", 2), false);
+        j.notify(3, &format!("{:08x}", 3), false);
+        j.notify(4, &format!("{:08x}", 4), true);
         assert!(j.submittable(4));
         assert!(j.submittable(3), "the displaced head keeps its grace");
         assert!(!j.submittable(2), "cleared by the clean");
