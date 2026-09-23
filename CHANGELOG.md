@@ -7,6 +7,9 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- `docs/rpc.md`: a reference for all 19 RPC methods: transport rules, parameters, result
+  fields, errors and examples, checked against a running node. `lib/rpc/tests/reference_doc.rs`
+  fails when the method list and the reference drift apart.
 - Node: opt-in address index, `[node] addrindex = true`, and the RPC method
   `account_getHistory(address, limit?, cursor?)`: an address's confirmed transactions,
   newest first, each with kind, direction, amount, fee and counterparty, paged by cursor.

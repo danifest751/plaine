@@ -122,6 +122,24 @@ issue upstream comes first; the fork changes it only after that.
 **1.4 RPC reference** — `docs/rpc.md`: parameters, response schemas, error codes, `curl`
 examples. A test checks that every method in `methods.rs` is documented.
 
+**1.5 Fee suggestions from the chain.** `fee_suggest` returns the relay floor for every
+percentile and samples no blocks, although SPEC §14 promises percentiles over recent
+blocks. The wallet's fee field needs real numbers: sample the transfers of the last blocks,
+fall back to the floor when there are none, and say how many blocks were sampled.
+
+**1.6 RPC defects found while writing the reference.** Each gets a failing test first, then
+the fix, then an upstream issue or PR:
+
+- after a reorg, `author_getNotes` loses the announcements of the new branch: the notes of
+  the applied blocks are added and then removed by the rollback that should precede them;
+- `chain_getBlockByHash` with a side-branch hash returns the canonical block's body at that
+  height under the side header;
+- with `txindex` on and the body pruned, `tx_get` says the index begins at that height
+  when the cause is pruning;
+- the announcement list lives in memory and is empty after a restart, and a note's `time`
+  is always 0;
+- a header's `chainwork` is all zeros except at the tip.
+
 **Deliberately not done:** regtest, new consensus parameters, a different seed list.
 
 ### Phase 2. Wallet core for the GUI — 2–3 days
@@ -303,6 +321,9 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   RPC and real-node tests; the method is documented in `docs/rpc.md`, which 1.4 extends.
   1.2 done: `tx_get(txid, address)` answers without `txindex`, and a real transfer is
   followed end to end (`transfer_roundtrip.rs`, under `check.sh --e2e`).
+  1.4 done: `docs/rpc.md` covers all 19 methods, checked field by field against a running
+  node; `reference_doc.rs` keeps it in step with the method list. Writing it turned up the
+  defects listed under 1.6. 1.3 waits on an upstream issue.
 - [ ] Phase 2
 - [ ] Phase 3
 - [ ] Phase 4
