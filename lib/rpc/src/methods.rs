@@ -431,19 +431,19 @@ fn tx_get(node: &Node, params: &Json) -> Result<Json, RpcError> {
         None | Some(Json::Null) => None,
         Some(_) => Some(address_param(node, params, 1, "address")?),
     };
-    let lookup = node.chain.tx(&txid);
+    let mut lookup = node.chain.tx(&txid);
 
     // Without a txid index, an address the transaction touches lets the address
     // index answer instead: how a wallet follows its own transactions.
     if let (TxLookup::NotIndexed { .. }, Some(addr)) = (&lookup, via) {
-        return match node.chain.tx_via_history(&txid, &addr) {
-            Some(TxLookup::Found(t)) => Ok(tx_json(&t)),
-            Some(TxLookup::Absent) => Err(RpcError::detail(
+        match node.chain.tx_via_history(&txid, &addr) {
+            Some(found @ (TxLookup::Found(_) | TxLookup::Pruned { .. })) => lookup = found,
+            Some(TxLookup::Absent) => return Err(RpcError::detail(
                 ErrorCode::NotFound,
                 "no transaction with that id is in the mempool or among the confirmed \
                  transactions that touch that address",
             )),
-            Some(TxLookup::NotIndexed { indexed_from }) => Err(RpcError::detail(
+            Some(TxLookup::NotIndexed { indexed_from }) => return Err(RpcError::detail(
                 ErrorCode::FeatureDisabled,
                 format!(
                     "not in the mempool, and not among the transactions that touch that \
@@ -453,7 +453,7 @@ fn tx_get(node: &Node, params: &Json) -> Result<Json, RpcError> {
                     indexed_from.unwrap_or(0)
                 ),
             )),
-            None => Err(RpcError::detail(
+            None => return Err(RpcError::detail(
                 ErrorCode::FeatureDisabled,
                 "not in the mempool or the recent blocks this node keeps at hand, and this \
                  node keeps neither a txid index nor an address index to look further. \
@@ -461,11 +461,20 @@ fn tx_get(node: &Node, params: &Json) -> Result<Json, RpcError> {
                  touch, or `txindex = true` to find any by id; either then needs a resync \
                  to cover past blocks.",
             )),
-        };
+        }
     }
 
     match lookup {
         TxLookup::Found(t) => Ok(tx_json(&t)),
+
+        TxLookup::Pruned { height } => Err(RpcError::detail(
+            ErrorCode::FeatureDisabled,
+            format!(
+                "the txid index places this transaction in block {height}, whose body this \
+                 pruned node no longer stores. Its header is kept; an archive node \
+                 (`prune = false`) can return the transaction."
+            ),
+        )),
 
         TxLookup::Absent => {
             Err(RpcError::detail(ErrorCode::NotFound, "no transaction with that id"))
@@ -1856,6 +1865,16 @@ mod tests {
         assert!(detail.contains("no transaction with that id"), "{detail}");
 
         assert!(!detail.contains("txindex"), "{detail}");
+    }
+
+    #[test]
+    fn tx_get_in_a_pruned_block_blames_pruning_not_the_index() {
+        let node = MockNode::synced().with_tx_in_pruned_block(812).into_node();
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7)])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::FeatureDisabled);
+        let d = e.detail.unwrap();
+        assert!(d.contains("block 812") && d.contains("pruned"), "{d}");
+        assert!(!d.contains("index begins"), "the index is complete; pruning is the cause: {d}");
     }
 
     fn txid_param(byte: u8) -> Json {

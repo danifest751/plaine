@@ -362,7 +362,7 @@ The same object as `chain_getBlockByHeight`.
 
 | code | when |
 |---|---|
-| `-32001` not found | the node does not know the hash, or does not store the block's body; unlike the by-height form, a pruned body is reported here too |
+| `-32001` not found | the node does not know the hash; the hash is a side-branch block, whose header the node keeps but not its body (`chain_getHeaderByHash` still answers); or the body is not stored; unlike the by-height form, a pruned body is reported here too |
 | `-32602` invalid params | `hash` missing or malformed; `verbosity` other than 0, 1 or 2; more than two parameters |
 
 ### Example
@@ -531,7 +531,7 @@ plays no part in the answer, but it is still checked.
 | code | when |
 |---|---|
 | `-32001` not found | the node runs with `txindex`, and the transaction is in neither the mempool, the recent blocks, nor the index; or, searching by `address` with an address index that covers the whole chain, no transaction with that id touches the address |
-| `-32003` feature disabled | not in the mempool or the recent blocks, and neither index can answer; or the index begins above the height needed, so the node cannot say whether the transaction exists (the detail names that height). Searching by `address`, the search also stops at the first block body a pruned node no longer has, and after 10,000 entries |
+| `-32003` feature disabled | not in the mempool or the recent blocks, and neither index can answer; or the index begins above the height needed, so the node cannot say whether the transaction exists (the detail names that height); or `txindex` places it in a block whose body a pruned node no longer stores (the detail names the block). Searching by `address`, the search also stops at the first block body a pruned node no longer has, and after 10,000 entries |
 | `-32602` invalid params | `txid` missing, not a string, not 64 characters, or not hex; a malformed `address`; more than two parameters |
 
 ### Example
