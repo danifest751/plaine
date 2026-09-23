@@ -12,6 +12,12 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
   newest first, each with kind, direction, amount, fee and counterparty, paged by cursor.
   Rows survive reorgs and are checked against the canonical body on read, as `txindex`
   hits are. Documented in `docs/rpc.md`.
+- Node: `tx_get(txid, address)` finds a confirmed transaction on a node without `txindex`,
+  through the address index of an address the transaction touches.
+- Node tests: `transfer_roundtrip.rs` follows a transfer signed by `plaine-wallet` from
+  `tx_sendRaw` through the mempool into both parties' histories, and finds it again after
+  a restart. It mines past coinbase maturity, so it runs under `scripts/check.sh --e2e`.
+  The test miner now leaves two cores free.
 - Storage: a block body that cannot be parsed is refused before anything is written;
   failing half-way through a block used to leave the committer unable to shut down.
 - Miner: `--batch N` (and `"batch"` in the config file) sets how many nonces one W^X seal

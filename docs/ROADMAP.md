@@ -301,6 +301,8 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   where the harness that needs it is written.
 - [ ] Phase 1 — in progress. 1.1 done: `addrindex` and `account_getHistory`, with storage,
   RPC and real-node tests; the method is documented in `docs/rpc.md`, which 1.4 extends.
+  1.2 done: `tx_get(txid, address)` answers without `txindex`, and a real transfer is
+  followed end to end (`transfer_roundtrip.rs`, under `check.sh --e2e`).
 - [ ] Phase 2
 - [ ] Phase 3
 - [ ] Phase 4
