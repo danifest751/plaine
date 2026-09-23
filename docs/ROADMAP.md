@@ -254,11 +254,10 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 ### Phase 6. Release — 2 days
 
 - Builds for Windows and Linux; a portable archive like the miner kit.
-- An Android miner built against Android's own libc (`aarch64-linux-android`, with the
-  NDK), so it resolves host names; the static musl build from
-  `scripts/build-android-static.sh` works but needs the pool as an IP address. Android
-  also takes big cores offline under load or heat, and pinning to an offline core fails;
-  the miner then leaves that worker unpinned, which is right, but could re-pin later.
+- Android: `scripts/build-android.sh` (NDK, resolves host names) is in place and tested
+  on a phone; the release ships its binary. Android takes big cores offline under load
+  or heat, and pinning to an offline core fails; the miner then leaves that worker
+  unpinned, which is right, but could re-pin once the core is back.
 - Release builds with `PLAINE_REQUIRE_BUILD_ID=1` — the mechanism in `build.rs` already
   exists: a binary that cannot name its commit is not built.
 - `SHA256SUMS` with every release.
