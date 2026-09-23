@@ -99,6 +99,7 @@ fi
 
 if (( e2e )); then
     step "end-to-end suites (real plaine-noded and plaine-miner, gentle profile)"
+    run cargo test --release -p plaine-noded --test transfer_roundtrip -- --ignored
     if [[ -f "$gui" ]]; then
         run cargo test --release --manifest-path "$gui" -- --ignored --test-threads 1
     fi
