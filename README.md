@@ -1,96 +1,118 @@
-Plaine is honest, censorship-free money open to everyone: built to shut out ASIC
-and GPU so every CPU earns for the real power it brings, with a steady reward that
-keeps issuance predictable and no supply cap to keep the network secure, while its
-inflation falls toward zero with every passing day. No premine, no presale, no
-dev fund.
+# Plaine
 
-In tribute to Satoshi Nakamoto, and in the author's own name, Plaine stands for
-one CPU, one vote.
+Plaine is a proof-of-work coin mined with ordinary processors. Its algorithm, Isochron,
+runs well on a CPU and badly on GPUs and ASICs, so every CPU earns for the work it does.
+A block every 60 seconds pays a flat 0.2 PLNE: no supply cap, no premine, no presale, no
+developer fund. With a fixed reward and a growing supply, inflation falls toward zero
+year by year.
 
-Nothing promised. Nothing hidden. See for yourself.
+This repository, **danifest751/plaine**, is a fork of
+[noaltitude/plaine](https://github.com/noaltitude/plaine) with the same consensus: a
+block or transaction valid for one is valid for the other. It adds a desktop wallet, the
+node and wallet work that wallet needs, a faster miner that also runs on Android phones,
+and tests up to end-to-end runs on a real node. What differs from upstream, and every
+upstream defect fixed here, is in [FORK.md](FORK.md).
 
-## Start mining
+![The desktop wallet](docs/img/wallet-home.png)
 
-Three steps, on any machine with a CPU.
+## Download
 
-1. Run a node. It finds the network through the built-in seeds and syncs the chain.
+Builds for Windows, Linux and Android are on the
+[releases page](https://github.com/danifest751/plaine/releases), with a `SHA256SUMS` file.
+Each binary names the commit it was built from (`--version`).
 
-       plaine-noded
+| archive | contents |
+|---|---|
+| `…-windows-x86_64.zip` | node, desktop wallet, command-line wallets, miner, start scripts |
+| `…-linux-x86_64.tar.gz` | node, command-line wallet, miner (static binaries) |
+| `…-android-arm64.zip` | the miner for 64-bit Android phones |
 
-2. Make an address to mine to. This prints the address and writes the key to miner.key.
+## Quick start
 
-       plaine-wallet new --role spend --out miner.key --no-passphrase
+With the Windows archive unpacked:
 
-3. Start the miner with the address from step 2. With no host it mines to the node
-   you started in step 1.
+1. **Run a node.** `start-node.bat`. It finds the network through built-in seeds and
+   downloads the chain.
+2. **Open the wallet.** `plaine-wallet-gui.exe`. Create a key, write down the backup
+   string it shows once, and your address is on the Home screen.
+3. **Mine.** In the wallet's Mining tab, press *Start mining*; or mine on a pool with
+   `mine-pool.bat`.
 
-       plaine-miner <your-plne1-address>
+The [user guide](docs/USER_GUIDE.md) walks through every screen, pool mining, mining on a
+phone, and the command line.
 
-That is all. The node keeps running and stays in sync; the miner mines against it; a
-block you find pays its coinbase straight to your address. Stop either with Ctrl+C.
-
-It does one thing and does it plainly: it moves coins. Accounts, nonces, ed25519
-signatures. Flat emission of 0.2 PLNE per block, on and on, with no supply cap,
-no premine, no founder's stash, and no developer tax. Nobody was paid before you
-showed up.
-
-The full rules a node enforces are in [SPEC.md](SPEC.md). Nothing below is a
-summary of the consensus rules; it is just how to build and run the thing.
-
-## Build
-
-You need a recent stable Rust, 1.85 or newer.
-
-```
-cargo build --release
-cargo build --release --manifest-path miner/Cargo.toml
-```
-
-The binaries come out in `target/release` and `miner/target/release`:
+### From the command line
 
 ```
-plaine-noded    the node
-plaine-wallet   the wallet
-plaine-miner    the CPU miner
+plaine-noded                                             # the node
+plaine-wallet new --role spend --out my.plnekey \
+    --passphrase-file pass.txt                           # prints your address
+plaine-miner plne1youraddress                            # mines to the local node
+plaine-miner plne1youraddress.rig@eu.rplant.xyz:17190    # or to a pool
 ```
 
-## Run a node
+The command-line wallet never opens a socket: it prints a signed transaction as hex for
+the node's RPC (`tx_sendRaw`), and takes `--nonce` and `--fee` from you. `--help` on any
+program lists the rest.
+
+## The coin
+
+| | |
+|---|---|
+| algorithm | Isochron v1: integer-only, a 64 KiB scratchpad per thread and a program rebuilt for every hash, which the miner JIT-compiles |
+| block time | 60 seconds, ASERT difficulty adjustment |
+| block reward | 0.2 PLNE, flat, forever; no cap |
+| unit | 1 PLNE = 1,000,000 mile |
+| coinbase maturity | 60 blocks |
+| deepest reorg accepted | 30 blocks |
+| accounts | ed25519 keys, nonces; bech32m addresses starting `plne1` |
+
+The full rules are in [SPEC.md](SPEC.md).
+
+## Node
 
 ```
-plaine-noded
+plaine-noded                  # data in %APPDATA%\Plaine on Windows, ~/.plaine elsewhere
+plaine-noded --print-config   # every setting, and where its value came from
 ```
 
-A fresh node dials the built-in seed, pulls headers and then bodies, and starts
-following the chain. Its stratum server listens on 127.0.0.1:9258 and its RPC on
-127.0.0.1:9257. To mine from other machines, set `listen = "0.0.0.0:9258"` under
-`[stratum]` in the config. `plaine-noded --help` lists the rest.
+It listens for peers on port 9256, serves JSON-RPC on `127.0.0.1:9257` and a stratum
+mining server on `127.0.0.1:9258`, reachable from this machine only. Useful settings in
+`noded.toml`:
 
-## Mine
+| setting | what it does |
+|---|---|
+| `[node] addrindex = true` | per-address transaction history, `account_getHistory`; the desktop wallet's History tab needs it |
+| `[node] txindex = true` | find any transaction by id |
+| `[node] prune = false` | keep every block body (the default keeps recent ones) |
+| `[stratum] listen = "0.0.0.0:9258"` | let miners on other machines connect |
 
-Point the miner at a node's stratum port and give it an address to pay:
+Every RPC method, with parameters, results and errors, is in [docs/rpc.md](docs/rpc.md).
 
-```
-plaine-miner --help
-```
+## Build from source
 
-It is CPU only, by design. Isochron runs well on a normal processor and badly on
-GPUs and ASICs, so there is nothing to gain by reaching for either.
-
-## Wallet
-
-The wallet holds the keys and the node holds none. It never opens a socket: it
-prints a signed transaction as hex and you hand that to the node over RPC.
-Because it cannot see the chain, you pass `--nonce` and `--fee` yourself; there
-are no defaults to guess them for you.
+Rust 1.85 or newer.
 
 ```
-plaine-wallet new --out key.plnekey --role spend --seed-stdin --passphrase-file pass.txt
-plaine-wallet address --in key.plnekey
-plaine-wallet transfer --in key.plnekey --to plne1... \
-    --amount 5plne --fee 1000mile --nonce 0 --passphrase-file pass.txt
+cargo build --release                                           # node, wallet
+cargo build --release --manifest-path miner/Cargo.toml          # miner
+cargo build --release --manifest-path wallet-gui/Cargo.toml     # desktop wallet
+scripts/build-android.sh                                        # miner for Android (NDK)
 ```
 
-`plaine-wallet --help` has the full command list.
+On Windows with the GNU toolchain, see the notes in [FORK.md](FORK.md#building).
+`scripts/check.sh` runs every test and lint a change must pass; `--e2e` adds the
+end-to-end runs against a real node and miner.
+
+## Documentation
+
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md): the desktop wallet, mining, phones, the
+  command line
+- [docs/rpc.md](docs/rpc.md): the node's JSON-RPC reference
+- [SPEC.md](SPEC.md): the consensus rules
+- [FORK.md](FORK.md): what this fork adds and changes, and the upstream defects it fixes
+- [CHANGELOG.md](CHANGELOG.md), [docs/ROADMAP.md](docs/ROADMAP.md),
+  [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 

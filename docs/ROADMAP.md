@@ -389,4 +389,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   are in `FORK.md`). 5.5 done: the Mining tab starts and stops `plaine-miner` with a
   Background or Maximum profile and shows its JSON status. 5.6 done: end to end, the tab
   mines to the wallet on a real node and shows accepted shares (`wallet-gui/tests/e2e.rs`).
-- [ ] Phase 6
+- [x] **Phase 6** — done: release `v1.0.0-fork.1`. `scripts/package-release.sh` builds
+  the Windows archive, static Linux binaries (rust-lld, musl) and the Android miner (NDK)
+  from a clean checkout with `PLAINE_REQUIRE_BUILD_ID=1`, with `SHA256SUMS`;
+  `docs/USER_GUIDE.md` has screenshots from a demo chain; the README describes the fork.

@@ -1,7 +1,7 @@
 // The Mining tab's model: the miner's JSON lines folded into what the tab shows,
 // the profiles, and where the miner and the stratum server are looked for.
 
-use plaine_wallet_gui::mining::{stratum_for, MinerState, Profile};
+use plaine_wallet_gui::mining::{rate, stratum_for, MinerState, Profile};
 
 // Lines exactly as plaine-miner --status-format json wrote them against a live node.
 const LIVE: [&str; 6] = [
@@ -63,4 +63,11 @@ fn stratum_goes_to_the_nodes_host() {
     assert_eq!(stratum_for("127.0.0.1:9257"), "127.0.0.1:9258");
     assert_eq!(stratum_for("10.1.2.3:19257"), "10.1.2.3:9258");
     assert_eq!(stratum_for("node.lan"), "node.lan:9258");
+}
+
+#[test]
+fn hash_rates_read_like_the_miners_own() {
+    assert_eq!(rate(940), "940 H/s");
+    assert_eq!(rate(22_310), "22.3 kH/s");
+    assert_eq!(rate(1_250_000), "1.25 MH/s");
 }

@@ -217,3 +217,12 @@ pub fn stratum_for(node_rpc: &str) -> String {
         .unwrap_or(node_rpc);
     format!("{host}:9258")
 }
+
+/// A hash rate for people: `940 H/s`, `22.3 kH/s`, `1.25 MH/s`.
+pub fn rate(h: u64) -> String {
+    match h {
+        h if h >= 1_000_000 => format!("{:.2} MH/s", h as f64 / 1e6),
+        h if h >= 1_000 => format!("{:.1} kH/s", h as f64 / 1e3),
+        h => format!("{h} H/s"),
+    }
+}

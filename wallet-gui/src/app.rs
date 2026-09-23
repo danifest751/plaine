@@ -634,7 +634,11 @@ impl WalletApp {
                 });
                 ui.end_row();
                 ui.label("Hash rate");
-                ui.label(format!("{} H/s (average {})", st.hashrate, st.avg));
+                ui.label(format!(
+                    "{} (average {})",
+                    mining::rate(st.hashrate),
+                    mining::rate(st.avg)
+                ));
                 ui.end_row();
                 ui.label("Shares");
                 ui.label(format!(
