@@ -4,6 +4,7 @@ pub mod work;
 
 use crate::{pad, Miner, Pads, BATCH};
 use plaine_consensus::pow;
+use plaine_pow::Scratch;
 use json::Framed;
 use std::collections::HashSet;
 use std::io::Write;
@@ -126,12 +127,48 @@ fn say_once(last: &mut Option<String>, why: &str) -> bool {
 }
 
 pub fn preflight() -> std::io::Result<()> {
-    if let Err(e) = Miner::new() {
-        return Err(std::io::Error::other(format!(
-            "this CPU cannot run Isochron: {e:?}. The algorithm needs hardware AES \
-             (AES-NI on x86-64, the ARMv8 crypto extensions on aarch64), which this \
-             machine does not have. Nothing was mined."
-        )));
+    preflight_verbose(false)
+}
+
+pub fn preflight_verbose(verbose: bool) -> std::io::Result<()> {
+    let mut miner = match Miner::new() {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(std::io::Error::other(format!(
+                "this CPU cannot run Isochron: {e:?}. The algorithm needs hardware AES \
+                 (AES-NI on x86-64, the ARMv8 crypto extensions on aarch64), which this \
+                 machine does not have. Nothing was mined."
+            )))
+        }
+    };
+
+    // SPEC 6.3 rule 6 says a mismatch against the frozen vectors means refusing to
+    // mine. The node honours that through plaine_pow::platform_self_check(), but that
+    // exercises the interpreter, and the miner's digests come out of the JIT - the one
+    // part of the pipeline that is rewritten per architecture and is most likely to be
+    // wrong on a CPU or a compiler nobody has tried yet. A wrong JIT is silent: every
+    // share is refused, the banscore climbs, and nothing on screen says why. Eight
+    // hashes cost a few milliseconds once.
+    let mut pad = Scratch::new();
+    for &(seed, want) in plaine_pow::SELF_CHECK.iter() {
+        let got = miner.mine_hash(&mut pad, seed).map_err(|e| {
+            std::io::Error::other(format!("the JIT self-check could not run: {e}"))
+        })?;
+        if got != want {
+            return Err(std::io::Error::other(format!(
+                "JIT SELF-CHECK FAILED: seed {seed:016x} gave {got:016x}, the frozen vector \
+                 says {want:016x}. This build's emitted code does not compute Isochron on \
+                 this machine, so every share it found would be refused and this IP banned \
+                 for it. Refusing to mine. Please report the CPU model and the build line \
+                 from --version."
+            )));
+        }
+    }
+    if verbose {
+        eprintln!(
+            "plaine-miner: JIT self-check passed - {} frozen vectors reproduced",
+            plaine_pow::SELF_CHECK.len()
+        );
     }
     Ok(())
 }
@@ -145,7 +182,7 @@ fn no_workers_is_fatal(totals: &Report) -> bool {
 }
 
 pub fn run(args: &Args) -> std::io::Result<Report> {
-    preflight()?;
+    preflight_verbose(args.verbose)?;
 
     let start = Instant::now();
     let mut totals = Report::default();
@@ -1284,6 +1321,27 @@ fn clean_keeps_displaced_job_for_grace() {
     #[test]
     fn preflight_passes_when_mineable() {
         preflight().expect("this machine runs the miner's own test suite, so it has AES");
+    }
+
+    #[test]
+    fn preflight_runs_the_frozen_vectors_through_the_jit() {
+        // preflight() now gates on SELF_CHECK, so passing it is a statement about this
+        // build's emitted code, not only about AES being present. Assert the same thing
+        // directly, so a preflight that quietly stopped checking would be caught.
+        let Ok(mut miner) = Miner::new() else {
+            eprintln!("no hardware AES or no mappable region here; skipping");
+            return;
+        };
+        let mut pad = Scratch::new();
+        assert!(!plaine_pow::SELF_CHECK.is_empty(), "there is nothing to check against");
+        for &(seed, want) in plaine_pow::SELF_CHECK.iter() {
+            let got = miner.mine_hash(&mut pad, seed).expect("the JIT runs here");
+            assert_eq!(
+                got, want,
+                "JIT digest for seed {seed:016x} does not match the frozen vector"
+            );
+        }
+        preflight().expect("and preflight must agree");
     }
 
     #[test]

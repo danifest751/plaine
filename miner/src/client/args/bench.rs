@@ -45,6 +45,10 @@ fn measure(b: &Bench, topo: &Topology) -> Result<Summary, String> {
 
     let warmup = if b.secs >= 5 { 1.0f64 } else { 0.5 };
 
+    // A hash rate measured on a JIT that does not compute Isochron is a number for
+    // nothing, so the benchmark takes the same gate the mining path does.
+    crate::client::preflight_verbose(b.verbose).map_err(|e| e.to_string())?;
+
     println!("plaine-miner --bench");
     println!(
         "  Isochron v1 - 64 KiB scratchpad, {BATCH} nonces per W^X seal, JIT\n"
@@ -369,7 +373,13 @@ fn report(
     let pages = Summary::of(w.iter().map(|x| x.pages));
     println!("    page size      {}", page_line(b.pages, pages, cpu::page_size()));
     if pages.huge() < pages.total() {
-        println!("                   {}", cpu::huge_pages().state);
+        // Prefer what the allocator actually reported. huge_pages().state is a static
+        // explanation that names the privilege, and on a machine that holds it and
+        // failed for another reason that line sends the reader somewhere useless.
+        match crate::pad::last_note() {
+            Some(note) => println!("                   {note}"),
+            None => println!("                   {}", cpu::huge_pages().state),
+        }
     }
     println!(
         "    scratchpad     64 KiB per nonce x {BATCH} in flight = {} MiB per thread, \

@@ -13,6 +13,14 @@ pub const X_BITS_MIN: u32 = (X_BYTES_MIN * 8) as u32;
 
 pub const THREAD_BITS: u32 = 8;
 
+/// One worker owns one of `2^THREAD_BITS` nonce lanes, so this many workers is the hard
+/// ceiling. Past it the lane index overflows THREAD_BITS, the top bits are cut by the
+/// slice mask, and worker `MAX_WORKERS + k` walks lane `k`'s nonces exactly. The server
+/// sees that as duplicate shares (error 22, +25 banscore each) and bans the IP after
+/// four of them. Machines with more than 256 logical CPUs exist, and
+/// `available_parallelism` is the default, so this has to be enforced, not documented.
+pub const MAX_WORKERS: usize = 1 << THREAD_BITS;
+
 pub const PREFIX_BYTES: usize = 124;
 
 pub const JOB_SLOTS: usize = 4;

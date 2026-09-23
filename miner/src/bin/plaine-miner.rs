@@ -29,7 +29,10 @@ CPU - which processors, not just how many\n\
 \x20 numbering is n/n+1 on most desktops but n/n+28 on a dual Broadwell, and a\n\
 \x20 pin list built on the wrong one silently measures the wrong thing.\n\
 \n\
-\x20 --threads <N>          N workers, placed by the OS. Default: every processor.\n\
+\x20 --threads <N>          N workers, placed by the OS. Default: every processor,\n\
+\x20                        capped at {} - a worker owns one of that many nonce\n\
+\x20                        lanes, and workers past it repeat an earlier lane's\n\
+\x20                        nonces, which a server counts as duplicate shares.\n\
 \x20 --cpu-affinity <list>  Which CPUs: 0,2,4,6 or 0-3,8-11. One worker per\n\
 \x20                        entry, so it already says how many - it cannot be\n\
 \x20                        combined with --threads. Pinning takes effect on Linux\n\
@@ -101,6 +104,7 @@ EXAMPLES\n\
 \x20 plaine-miner plne1you.rig1@pool.example:9258 --cpu-priority 1\n\
 \x20 plaine-miner --config ~/.plaine/miner.json\n",
         env!("CARGO_PKG_VERSION"),
+        plaine_pow_mine::client::work::MAX_WORKERS,
         args::DEFAULT_BENCH_SECS,
     )
 }
