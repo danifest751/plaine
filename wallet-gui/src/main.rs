@@ -7,7 +7,9 @@ struct App(WalletApp);
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut eframe::egui::Ui, _frame: &mut eframe::Frame) {
-        self.0.show(ui);
+        // A panel paints the theme's background; drawn straight onto the root the
+        // window keeps the dark clear colour under light-theme text.
+        eframe::egui::CentralPanel::default().show(ui, |ui| self.0.show(ui));
     }
 }
 

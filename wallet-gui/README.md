@@ -62,5 +62,16 @@ cargo test --release --manifest-path wallet-gui/Cargo.toml
 ```
 
 The screens are driven headless with `egui_kittest` against a node in memory, including
-one shaped like upstream's; the HTTP client is tested against a real socket; argon2id
-against the reference implementation's vector.
+one shaped like upstream's and one that is down; the HTTP client is tested against a
+real socket; argon2id against the reference implementation's vector.
+
+`tests/e2e.rs` runs the whole wallet against a real `plaine-noded` and `plaine-miner` on
+a fresh chain: two keys created on the first-run screen, one mined past coinbase
+maturity, a transfer sent on the send screen and seen by both. It takes a few minutes, so
+it is ignored by default:
+
+```
+cargo test --release --manifest-path wallet-gui/Cargo.toml --test e2e -- --ignored
+```
+
+`scripts/check.sh --e2e` runs it, after building the node and the miner it needs.

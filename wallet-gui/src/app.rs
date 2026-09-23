@@ -428,6 +428,9 @@ impl WalletApp {
                 ui.selectable_value(&mut s.tab, Tab::Send, "Send");
                 ui.selectable_value(&mut s.tab, Tab::History, "History");
                 ui.selectable_value(&mut s.tab, Tab::Settings, "Settings");
+                if ui.button("Refresh").clicked() {
+                    s.worker.send(Cmd::Refresh);
+                }
                 if ui.button("Lock").clicked() {
                     lock = true;
                 }
@@ -651,10 +654,23 @@ fn history_tab(ui: &mut egui::Ui, s: &mut Session, view: &NodeView) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new("history")
             .striped(true)
-            .num_columns(4)
+            .num_columns(5)
             .show(ui, |ui| {
+                if !rows.is_empty() {
+                    for h in [
+                        "Status",
+                        "Time (UTC)",
+                        "Type",
+                        "Amount, PLNE",
+                        "Counterparty",
+                    ] {
+                        ui.label(RichText::new(h).underline());
+                    }
+                    ui.end_row();
+                }
                 for r in &rows {
                     ui.label(&r.status);
+                    ui.label(&r.when);
                     ui.label(format!("{} {}", r.kind, r.direction));
                     ui.label(&r.amount);
                     ui.monospace(if r.counterparty.is_empty() {

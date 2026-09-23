@@ -363,8 +363,17 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   copy of the key, the backup behind the passphrase). Node calls run on a worker thread.
   21 headless tests (`egui_kittest`) and model tests, a separation test for the lock
   file. Checked by hand against a synced indexing node: the owner's address shows its
-  14 incoming pool payouts. Still to do: QR code, and the end-to-end run against a
-  real node (phase 4).
-- [ ] Phase 4
+  14 incoming pool payouts. Still to do: QR code, the end-to-end run against a real
+  node (phase 4), and a visual pass the owner asked for after seeing the first version:
+  layout, typography, colours, a proper history table.
+- [x] **Phase 4** — done. The main scenario runs through the GUI against a real
+  `plaine-noded` and `plaine-miner` (`wallet-gui/tests/e2e.rs`, under `check.sh --e2e`):
+  keys A and B created on the first-run screen, A mined past maturity, A sends to B on
+  the send screen, B sees the balance and an incoming entry, A an outgoing one, and the
+  balances equal `emission_audit`'s issued total. 234 s here. Failures are covered with
+  a node in memory and a real socket: bad address, amount above the spendable balance,
+  wrong passphrase, weak passphrase, a node that is down, a transfer the node refuses
+  (a reused nonce among them). Measurement 0.5: mining 62 blocks on a fresh chain with
+  all but two cores takes 2.5-3.5 minutes on a Ryzen 7 8745HS.
 - [ ] Phase 5
 - [ ] Phase 6
