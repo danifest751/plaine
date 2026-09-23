@@ -3,6 +3,8 @@
 //! Spike: a minimal egui view that the headless test harness can drive.
 //! Replaced by the real wallet in phase 3 of docs/ROADMAP.md.
 
+pub mod kdf;
+
 pub struct Spike {
     pub count: u32,
 }

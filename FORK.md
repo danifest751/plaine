@@ -27,6 +27,23 @@ in [CHANGELOG.md](CHANGELOG.md).
 - [docs/rpc.md](docs/rpc.md): a reference for every RPC method, checked against a running
   node, and `lib/rpc/tests/reference_doc.rs`, which fails when the two drift apart.
 
+**Wallet**
+
+- `plaine_wallet::api`: the wallet as a library, which the CLI now runs on and the
+  desktop wallet will.
+- A memory-hard key file KDF, `kdf: argon2id-v1`: 64 MiB and one lane per guess, three
+  passes by default, stored in the same key file format. The wallet crate may depend on
+  nothing but plaine-consensus, ed25519-dalek and getrandom (upstream pins that in
+  `wallet/tests/end_to_end.rs`), so it knows the format and takes argon2id as a function
+  a program installs at start-up. `wallet-gui/` links the `argon2` crate and installs it,
+  in the desktop wallet and in `plaine-wallet-cli`, the same command line with
+  `--kdf argon2id` available. The node does not compile it.
+- Key files made before keep opening, with any build: `kdf: none` and
+  `blake3-iter-v1`. `plaine-wallet-cli passphrase --kdf argon2id` moves one to
+  argon2id, same address, original untouched. The CLI's default for new
+  files stays `blake3-iter-v1`, so what it writes still opens in upstream's wallet;
+  upstream's wallet cannot open an `argon2id-v1` file and says so.
+
 **Miner**
 
 - The W^X batch is sized to the machine's L2 (`--batch N` to override), and workers are

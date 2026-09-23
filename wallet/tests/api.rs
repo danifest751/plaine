@@ -3,7 +3,7 @@
 
 use plaine_consensus::codec::TransferTx;
 use plaine_consensus::constants::{Network, FEE_FLOOR_MILE};
-use plaine_wallet::api::{self, Notice};
+use plaine_wallet::api::{self, Kdf, Notice};
 use plaine_wallet::error::WalletError;
 use plaine_wallet::keyfile::Role;
 use plaine_wallet::secret::SecretBytes;
@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 // Low enough to keep the suite fast; the work factor is not what is tested here.
 const ITERS: u64 = 1_000;
+const FAST: Kdf = Kdf::Blake3Iter { iters: ITERS };
 
 fn scratch(name: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -33,7 +34,7 @@ fn pass(s: &str) -> SecretBytes {
 fn a_generated_key_opens_with_its_passphrase_and_nothing_else() {
     let dir = scratch("generated");
     let path = dir.join("k.plnekey");
-    let created = api::create_key(&path, Role::Spend, None, Some(&pass("correct horse")), ITERS)
+    let created = api::create_key(&path, Role::Spend, None, Some(&pass("correct horse")), FAST)
         .expect("create");
     assert!(created.generated);
     assert!(created.summary.encrypted);
@@ -47,7 +48,7 @@ fn a_generated_key_opens_with_its_passphrase_and_nothing_else() {
     assert!(matches!(wrong, WalletError::Crypto(_)), "{wrong}");
     assert!(api::open(&path, None).is_err(), "an encrypted file needs its passphrase");
 
-    let again = api::create_key(&path, Role::Spend, None, None, ITERS).unwrap_err();
+    let again = api::create_key(&path, Role::Spend, None, None, FAST).unwrap_err();
     assert!(matches!(again, WalletError::Refused(_)), "a key file is never overwritten: {again}");
 }
 
@@ -55,7 +56,7 @@ fn a_generated_key_opens_with_its_passphrase_and_nothing_else() {
 fn the_backup_string_restores_the_same_address() {
     let dir = scratch("backup");
     let original = dir.join("a.plnekey");
-    let created = api::create_key(&original, Role::Spend, None, None, ITERS).expect("create");
+    let created = api::create_key(&original, Role::Spend, None, None, FAST).expect("create");
     assert_eq!(created.notices, [Notice::Unencrypted], "no passphrase is said out loud");
 
     let backup = api::open(&original, None).expect("open").backup_string();
@@ -64,7 +65,7 @@ fn the_backup_string_restores_the_same_address() {
     let (seed, notice) = api::decode_seed_text(&format!("  {backup}\n"), true).expect("decode");
     assert_eq!(notice, None, "a checksummed string needs no warning");
     let restored = dir.join("b.plnekey");
-    let r = api::create_key(&restored, Role::Spend, Some(seed), Some(&pass("p")), ITERS)
+    let r = api::create_key(&restored, Role::Spend, Some(seed), Some(&pass("p")), FAST)
         .expect("restore");
     assert!(!r.generated);
     assert_eq!(r.summary.address, created.summary.address);
@@ -74,7 +75,7 @@ fn the_backup_string_restores_the_same_address() {
 fn seed_text_is_checked_the_way_the_cli_checks_it() {
     let dir = scratch("seedtext");
     let path = dir.join("k.plnekey");
-    api::create_key(&path, Role::Spend, None, None, ITERS).expect("create");
+    api::create_key(&path, Role::Spend, None, None, FAST).expect("create");
     let backup = api::open(&path, None).expect("open").backup_string();
 
     let bare = &backup[..64];
@@ -98,7 +99,7 @@ fn seed_text_is_checked_the_way_the_cli_checks_it() {
 fn a_signed_transfer_verifies_and_round_trips() {
     let dir = scratch("sign");
     let path = dir.join("k.plnekey");
-    api::create_key(&path, Role::Spend, None, Some(&pass("p")), ITERS).expect("create");
+    api::create_key(&path, Role::Spend, None, Some(&pass("p")), FAST).expect("create");
     let key = api::open(&path, Some(&pass("p"))).expect("open");
     let to = "plne1pjvhejseh7veg36dvuqn239puwu7rfsuf57xp5";
 
@@ -125,34 +126,50 @@ fn rewrap_changes_the_passphrase_and_leaves_the_original() {
     let dir = scratch("rewrap");
     let old = dir.join("old.plnekey");
     let new = dir.join("new.plnekey");
-    api::create_key(&old, Role::Spend, None, Some(&pass("old")), ITERS).expect("create");
+    api::create_key(&old, Role::Spend, None, Some(&pass("old")), FAST).expect("create");
     let key = api::open(&old, Some(&pass("old"))).expect("open");
 
-    let (summary, carried) = key.rewrap(&new, Some(&pass("new")), ITERS).expect("rewrap");
+    let (summary, carried) = key.rewrap(&new, Some(&pass("new")), FAST).expect("rewrap");
     assert_eq!(carried, None, "there was no journal to carry");
     assert_eq!(summary.address, key.address());
     assert!(api::open(&new, Some(&pass("new"))).is_ok());
     assert!(api::open(&new, Some(&pass("old"))).is_err());
     assert!(api::open(&old, Some(&pass("old"))).is_ok(), "the original is untouched");
 
-    assert!(matches!(key.rewrap(&old, None, ITERS), Err(WalletError::Refused(_))));
-    assert!(matches!(key.rewrap(&new, None, ITERS), Err(WalletError::Refused(_))));
+    assert!(matches!(key.rewrap(&old, None, FAST), Err(WalletError::Refused(_))));
+    assert!(matches!(key.rewrap(&new, None, FAST), Err(WalletError::Refused(_))));
 }
 
 #[test]
 fn creation_advice_matches_the_choice() {
-    assert_eq!(api::create_notices(Role::Spend, false, ITERS), [Notice::Unencrypted]);
+    assert_eq!(api::create_notices(Role::Spend, false, FAST), [Notice::Unencrypted]);
     assert_eq!(
-        api::create_notices(Role::Spend, true, plaine_wallet::kdf::DEFAULT_ITERS),
+        api::create_notices(
+            Role::Spend,
+            true,
+            Kdf::Blake3Iter { iters: plaine_wallet::kdf::DEFAULT_ITERS }
+        ),
         [Notice::KdfNotMemoryHard, Notice::KeepPassphraseApart]
     );
-    let few = api::create_notices(Role::Author, true, ITERS);
+    let few = api::create_notices(Role::Author, true, FAST);
     assert_eq!(few.first(), Some(&Notice::FewIterations { iters: ITERS }));
-    assert_eq!(few.last(), Some(&Notice::AirGapThisRole));
+    assert_eq!(few.last(), Some(&Notice::AirGapThisRole { memory_hard: false }));
     for n in few {
         assert!(!n.lines().is_empty() && n.lines().iter().all(|l| !l.contains("  ")), "{n:?}");
     }
     assert!(api::check_iters(plaine_wallet::kdf::MAX_ITERS + 1).is_err());
+}
+
+#[test]
+fn argon2id_without_an_implementation_is_refused_and_writes_nothing() {
+    // Nothing in this test binary installs one, as in the plain plaine-wallet CLI.
+    assert!(!plaine_wallet::kdf::argon2id_available());
+    let dir = scratch("no-argon2id");
+    let path = dir.join("k.plnekey");
+    let e = api::create_key(&path, Role::Spend, None, Some(&pass("p")), Kdf::RECOMMENDED)
+        .unwrap_err();
+    assert!(e.to_string().contains("argon2id-v1"), "{e}");
+    assert!(!path.exists(), "a key file that could not be sealed is not left behind");
 }
 
 #[test]

@@ -1,0 +1,13 @@
+PLNEKEY1
+version: 1
+role: spend
+created: 1790167525
+kdf: blake3-iter-v1
+kdf_iters: 1000
+kdf_salt: 6ad2bd2c57308716cc0c0235dc0ae22f9f22bac1977c051434c64121d2c0c6d7
+cipher: blake3-ctr-v1
+nonce: 7594ca6c53f311e90553e2f0d14f3dac
+pubkey: 50bffc732c9c4f19ca78b044ff0839764e8e1fd36c6a300374689597587b864a
+address: plne1ned7pg9p8wk3jdu69m5g7yt39yc4s6ye8zgdk9
+ciphertext: 19276099fdd78a3ce8d0321c4c3f3e43f5532c4e84eced26539c7ec969da85d5
+mac: 61c7a02170c2776b31e6b4b866cdc306b0a063c941228457f6462be4a6975ecc
