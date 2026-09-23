@@ -6,7 +6,7 @@ use crate::views::{
     Budgets, ChainInfo, ChainView, CheckpointLink, CheckpointStatus, CheckpointSubmit,
     EmissionAudit, FeeSuggestion,
     Hash32, HeaderRecord, HistoryEntry, HistoryLookup, KeySource, MempoolInfo, MempoolView, NetView, Network, Node, NotesCursor,
-    PeerInfo, PolicyView, StratumSession, StratumView, SubmitError, SyncStatus, TxLookup, TxRecord,
+    PeerInfo, PolicyView, StratumSession, StratumView, SubmitError, SyncStatus, TxLocation, TxLookup, TxRecord,
     Verbosity,
 };
 
@@ -377,6 +377,22 @@ impl ChainView for MockNode {
         let entries: Vec<HistoryEntry> = sorted.into_iter().take(limit).cloned().collect();
         let next_cursor = if more { entries.last().map(|e| (e.height, e.index)) } else { None };
         HistoryLookup::Page { indexed_from: *indexed_from, entries, next_cursor, unavailable_below: None }
+    }
+
+    fn tx_via_history(&self, txid: &Hash32, addr: &Address20) -> Option<TxLookup> {
+        let (indexed_from, all) = self.history.as_ref()?;
+        let _ = addr;
+        Some(match all.iter().find(|e| &e.txid == txid) {
+            Some(e) => TxLookup::Found(TxRecord {
+                txid: *txid,
+                type_byte: 0,
+                raw: Vec::new(),
+                location: TxLocation::Block { height: e.height, confirmations: e.confirmations },
+                decoded: Json::Null,
+            }),
+            None if *indexed_from == 0 => TxLookup::Absent,
+            None => TxLookup::NotIndexed { indexed_from: Some(*indexed_from) },
+        })
     }
 
     fn author_notes(&self, cursor: NotesCursor, limit: usize) -> AuthorNotesPage {

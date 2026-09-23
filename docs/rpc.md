@@ -9,6 +9,33 @@ decimal strings in mile (1 PLNE = 1,000,000 mile), never JSON numbers.
 
 ---
 
+## `tx_get` — an optional second parameter
+
+Upstream's `tx_get(txid)` finds a transaction in the mempool, in blocks not yet written to
+disk, or through `txindex`. A node without `txindex` could not find anything older.
+
+`tx_get(txid, address)` adds one more place to look: when `txindex` cannot answer and the
+node runs with `addrindex = true`, it searches the confirmed transactions that touch
+`address`, newest first. This is how a wallet follows its own transactions: it knows the
+address, and its transactions are near the top of that address's history.
+
+| # | name | type | |
+|---|---|---|---|
+| 0 | `txid` | hex string | |
+| 1 | `address` | string, optional | an address the transaction touches: sender, recipient, coinbase recipient or announcement author |
+
+The result is the same object `tx_get(txid)` returns.
+
+| code | when |
+|---|---|
+| `-32001` not found | the address index covers the whole chain and no transaction with that id touches `address` |
+| `-32003` feature disabled | neither index can answer; or the address index begins above genesis, or the node is pruned, or the search stopped after 10,000 entries - the detail says from which height on it looked |
+| `-32602` invalid params | a malformed `address` (checked even when `txindex` answers) |
+
+With `txindex = true` the address is not needed and plays no part in the answer.
+
+---
+
 ## `account_getHistory`
 
 Confirmed transactions that touch an address, newest first, from that address's side.

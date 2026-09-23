@@ -503,7 +503,64 @@ impl plaine_rpc::views::ChainView for RpcChain {
             }
         }
     }
+
+    fn tx_via_history(&self, txid: &Hash32, addr: &Address20) -> Option<TxLookup> {
+        let tip = self.tip.get().height;
+        let mut cursor = None;
+        let mut searched = 0usize;
+        loop {
+            let (indexed_from, hits, more) = match self.store.addr_history(addr, cursor, 256)? {
+                plaine_storage::AddrHistory::NotIndexed => return None,
+                plaine_storage::AddrHistory::Page { indexed_from, hits, more } => {
+                    (indexed_from, hits, more)
+                }
+            };
+            for hit in &hits {
+                cursor = Some((hit.height, hit.index));
+                if hit.height > tip {
+                    continue;
+                }
+                // Each hit costs a body read; past the bound, say how far the search
+                // got rather than keep the RPC worker busy.
+                searched += 1;
+                let Some(raw) = (searched <= TX_SEARCH_MAX_HITS)
+                    .then(|| self.store.body_at_verified(hit.height))
+                    .flatten()
+                else {
+                    return Some(TxLookup::NotIndexed { indexed_from: Some(hit.height + 1) });
+                };
+                let Ok(body) = plaine_consensus::codec::BlockBody::parse(&raw) else { continue };
+                let i = hit.index as usize;
+                let Some(Ok(tx)) = body.decode_tx(i) else { continue };
+                if txid_of(&tx).as_ref() != Some(txid) {
+                    continue;
+                }
+                let Some(tx_raw) = body.tx_bytes(i) else { continue };
+                return Some(TxLookup::Found(TxRecord {
+                    txid: *txid,
+                    type_byte: tx.type_byte(),
+                    raw: tx_raw.to_vec(),
+                    location: TxLocation::Block {
+                        height: hit.height,
+                        confirmations: tip - hit.height + 1,
+                    },
+                    decoded: plaine_rpc::json::Json::Null,
+                }));
+            }
+            if !more {
+                return Some(if indexed_from == 0 {
+                    TxLookup::Absent
+                } else {
+                    TxLookup::NotIndexed { indexed_from: Some(indexed_from) }
+                });
+            }
+        }
+    }
 }
+
+/// How many of an address's index hits `tx_via_history` checks before giving up.
+/// A wallet looks for its own recent transactions, which come first.
+const TX_SEARCH_MAX_HITS: usize = 10_000;
 
 /// How `tx` looks from `addr`'s side, or `None` when it does not touch `addr`.
 fn describe(
