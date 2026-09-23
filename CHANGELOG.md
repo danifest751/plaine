@@ -7,6 +7,11 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Miner: `--status-format json` (and `"status-format"` in the config file) writes one JSON
+  object per line on stdout: `status` every `--status` seconds, `share`, `block` and a
+  final `summary`. Errors stay on stderr as text.
+- Miner: the processor topology is read on Android as on Linux; phones' big.LITTLE cores
+  are classed by `cpu_capacity` and pinning takes the fastest class first.
 - Desktop wallet: an end-to-end test through the GUI against a real node and miner (two
   keys, a matured coinbase, a transfer on the send screen, both histories, balances
   against `emission_audit`), a Refresh button, and a test for a node that is down.

@@ -47,7 +47,12 @@ in [CHANGELOG.md](CHANGELOG.md).
 **Miner**
 
 - The W^X batch is sized to the machine's L2 (`--batch N` to override), and workers are
-  pinned one per core before any SMT sibling (`--no-pin` to opt out).
+  pinned one per core before any SMT sibling (`--no-pin` to opt out), fastest core class
+  first.
+- Android: the processor topology is read as on Linux, and big.LITTLE cores are told
+  apart by `cpu_capacity`, so a phone's big cores are used first.
+- `--status-format json`: one JSON object per line on stdout (status, share, block,
+  summary) for a program to read; the desktop wallet's Mining tab uses it.
 
 **Tests and tooling**
 
