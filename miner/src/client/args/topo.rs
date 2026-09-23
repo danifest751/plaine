@@ -316,8 +316,9 @@ fn read_platform() -> Topology {
         return t;
     }
 
-    let mut p_cores = read_range_file("/sys/devices/cpu_core/cpus");
-    let mut e_cores = read_range_file("/sys/devices/cpu_atom/cpus");
+    let p_cores = read_range_file("/sys/devices/cpu_core/cpus");
+    let e_cores = read_range_file("/sys/devices/cpu_atom/cpus");
+    let mut by_capacity: Vec<(usize, u8)> = Vec::new();
     if p_cores.is_empty() && e_cores.is_empty() {
         // ARM big.LITTLE (phones, most Android): no hybrid PMU files, but each CPU
         // states its relative capacity, 1024 for the fastest.
@@ -328,20 +329,20 @@ fn read_platform() -> Topology {
                 Some((id, u32::try_from(c).ok()?))
             })
             .collect();
-        if let Some((fast, slow)) = split_by_capacity(&caps) {
-            p_cores = fast;
-            e_cores = slow;
-        }
+        by_capacity = classes_by_capacity(&caps).unwrap_or_default();
     }
 
     for id in online {
         let base = format!("/sys/devices/system/cpu/cpu{id}");
         let package = read_i32(&format!("{base}/topology/physical_package_id")).unwrap_or(-1);
         let core = read_i32(&format!("{base}/topology/core_id")).unwrap_or(-1);
-        let class = match (p_cores.contains(&id), e_cores.contains(&id)) {
-            (true, false) => Some(1),
-            (false, true) => Some(0),
-            _ => None,
+        let class = match by_capacity.iter().find(|c| c.0 == id) {
+            Some(c) => Some(c.1),
+            None => match (p_cores.contains(&id), e_cores.contains(&id)) {
+                (true, false) => Some(1),
+                (false, true) => Some(0),
+                _ => None,
+            },
         };
         let (l2_kib, l2_shared) = read_l2_linux(&base);
         t.cpus.push(Cpu { id, group: 0, package, core, class, l2_kib, l2_shared });
@@ -377,18 +378,23 @@ fn model_from_cpuinfo(s: &str) -> String {
     String::new()
 }
 
-/// Splits CPUs into the fastest class and the rest by their `cpu_capacity`. `None`
-/// when every CPU reports the same capacity, or none does: nothing to split.
+/// A class per CPU from its `cpu_capacity`: 0 for the slowest level, one more
+/// for each faster one. A phone with three clusters (little, big, prime) gets
+/// three classes. `None` when every CPU reports the same capacity, or none does.
 #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
-fn split_by_capacity(caps: &[(usize, u32)]) -> Option<(Vec<usize>, Vec<usize>)> {
-    let max = caps.iter().map(|c| c.1).max()?;
-    let min = caps.iter().map(|c| c.1).min()?;
-    if max == min {
+fn classes_by_capacity(caps: &[(usize, u32)]) -> Option<Vec<(usize, u8)>> {
+    let mut levels: Vec<u32> = caps.iter().map(|c| c.1).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    if levels.len() < 2 {
         return None;
     }
-    let fast = caps.iter().filter(|c| c.1 == max).map(|c| c.0).collect();
-    let slow = caps.iter().filter(|c| c.1 < max).map(|c| c.0).collect();
-    Some((fast, slow))
+    caps.iter()
+        .map(|&(id, cap)| {
+            let rank = levels.iter().position(|&l| l == cap)?;
+            Some((id, u8::try_from(rank).ok()?))
+        })
+        .collect()
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -643,16 +649,33 @@ mod tests {
     }
 
     #[test]
-    fn a_phone_splits_into_its_big_and_little_cores_by_capacity() {
-        // A Snapdragon 732G (the Poco X3): two Cortex-A76 at full capacity, six
-        // Cortex-A55 at well under half of it.
+    fn a_phone_gets_one_class_per_cluster_by_capacity() {
+        // Snapdragon 860 (Poco X3 Pro), as its kernel reports it: four A55 at 363,
+        // three A76 at 837, one prime A76 at 1024.
+        let caps: Vec<(usize, u32)> = (0..4)
+            .map(|id| (id, 363))
+            .chain((4..7).map(|id| (id, 837)))
+            .chain([(7, 1024)])
+            .collect();
+        let classes = classes_by_capacity(&caps).expect("three levels");
+        assert_eq!(classes, [(0, 0), (1, 0), (2, 0), (3, 0), (4, 1), (5, 1), (6, 1), (7, 2)]);
+
+        // Snapdragon 732G (Poco X3): two clusters.
         let caps: Vec<(usize, u32)> =
             (0..6).map(|id| (id, 423)).chain((6..8).map(|id| (id, 1024))).collect();
-        let (fast, slow) = split_by_capacity(&caps).expect("two classes");
-        assert_eq!(fast, [6, 7]);
-        assert_eq!(slow, [0, 1, 2, 3, 4, 5]);
-        assert_eq!(split_by_capacity(&[(0, 1024), (1, 1024)]), None, "one class, nothing to split");
-        assert_eq!(split_by_capacity(&[]), None);
+        let classes = classes_by_capacity(&caps).expect("two levels");
+        assert_eq!(classes.iter().filter(|c| c.1 == 1).count(), 2);
+
+        assert_eq!(classes_by_capacity(&[(0, 1024), (1, 1024)]), None, "one level, no classes");
+        assert_eq!(classes_by_capacity(&[]), None);
+    }
+
+    #[test]
+    fn spread_goes_prime_then_big_then_little() {
+        let mut cpus: Vec<Cpu> = (0..4).map(|id| cpu(id, 0, id as i32, Some(0))).collect();
+        cpus.extend((4..7).map(|id| cpu(id, 1, id as i32 - 4, Some(1))));
+        cpus.push(cpu(7, 2, 0, Some(2)));
+        assert_eq!(topo(cpus).spread(), [7, 4, 5, 6, 0, 1, 2, 3]);
     }
 
     #[test]

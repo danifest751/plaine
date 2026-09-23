@@ -7,6 +7,10 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Miner on Android phones: `scripts/build-android-static.sh` builds a static arm64
+  binary without the NDK. Tested on a Poco X3 Pro against rplant.xyz: 4.8-5.0 kH/s,
+  shares accepted. Cores are classed per `cpu_capacity` level, so a phone with little,
+  big and prime clusters pins to prime, then big, then little.
 - Desktop wallet: a Mining tab. It runs `plaine-miner` paying to the wallet's address, in
   a Background (half the cores, idle priority) or Maximum profile, and shows the hash
   rate, shares, blocks and height from the miner's JSON status. It keeps mining while the
@@ -76,6 +80,10 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Fixed
 
+- Miner on aarch64: the JIT's instruction-cache flush called `__clear_cache`, which only
+  a C runtime (libgcc or compiler-rt) provides, so a static build without one did not
+  link. The miner now does the flush itself: the same `dc cvau` / `ic ivau` sequence,
+  line sizes from `CTR_EL0`.
 - Node: `fee_suggest` sampled no blocks and returned the relay floor as every percentile.
   It now takes nearest-rank percentiles of the transfer fees in the last 240 blocks (the
   window SPEC §14 names), never below the relay floor, computed once per tip.

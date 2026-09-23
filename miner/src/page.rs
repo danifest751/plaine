@@ -259,20 +259,52 @@ mod sys {
             return Err(io::Error::last_os_error());
         }
         if exec {
+            // aarch64 keeps separate i/d caches, so a bare mprotect is not enough.
+            // SAFETY: [addr, addr+len) is the range we just turned executable.
             #[cfg(target_arch = "aarch64")]
-            {
-                extern "C" {
-                    fn __clear_cache(start: *mut core::ffi::c_char, end: *mut core::ffi::c_char);
-                }
-
-                // aarch64 keeps separate i/d caches, so a bare mprotect is not enough.
-                // SAFETY: [addr, addr+len) is the range we just turned executable.
-                unsafe {
-                    __clear_cache(addr.cast(), addr.add(len).cast());
-                }
-            }
+            unsafe {
+                sync_icache(addr, len)
+            };
         }
         Ok(())
+    }
+
+    /// Makes freshly written code at [start, start+len) visible to instruction
+    /// fetch: what compiler-rt's and libgcc's `__clear_cache` do on aarch64, done
+    /// here so a build that links no C runtime (a static musl binary, which runs
+    /// on Android without the NDK) needs no such symbol. Clean the data cache to
+    /// the point of unification line by line, wait, invalidate the instruction
+    /// cache over the same range, wait, and resynchronise the pipeline. Line sizes
+    /// come from CTR_EL0, which Linux lets user space read.
+    ///
+    /// # Safety
+    /// [start, start+len) must be mapped.
+    #[cfg(target_arch = "aarch64")]
+    unsafe fn sync_icache(start: *const u8, len: usize) {
+        use core::arch::asm;
+        let ctr: u64;
+        // SAFETY: a read of an EL0-accessible system register.
+        unsafe { asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack, preserves_flags)) };
+        let dline = 4usize << ((ctr >> 16) & 0xf);
+        let iline = 4usize << (ctr & 0xf);
+        let begin = start as usize;
+        let end = begin + len;
+        let mut a = begin & !(dline - 1);
+        while a < end {
+            // SAFETY: cache maintenance on an address inside the caller's mapping.
+            unsafe { asm!("dc cvau, {}", in(reg) a, options(nostack, preserves_flags)) };
+            a += dline;
+        }
+        // SAFETY: barriers have no operands.
+        unsafe { asm!("dsb ish", options(nostack, preserves_flags)) };
+        let mut a = begin & !(iline - 1);
+        while a < end {
+            // SAFETY: as above.
+            unsafe { asm!("ic ivau, {}", in(reg) a, options(nostack, preserves_flags)) };
+            a += iline;
+        }
+        // SAFETY: barriers have no operands.
+        unsafe { asm!("dsb ish", "isb", options(nostack, preserves_flags)) };
     }
 
     pub fn release(addr: *mut u8, len: usize) {
