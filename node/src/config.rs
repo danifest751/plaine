@@ -641,7 +641,10 @@ fn build(path: &str, doc: &Document, ov: &Overrides) -> Result<Config, Diagnosti
         ));
     }
 
-    let stratum_default = format!("0.0.0.0:{}", k::PORT_STRATUM);
+    // Loopback by default: the common setup mines on the node's own machine, and a
+    // node started with no config should not open a mining server to the internet.
+    // Miners on other machines, or a pool front-end, need `listen = "0.0.0.0:9258"`.
+    let stratum_default = format!("127.0.0.1:{}", k::PORT_STRATUM);
     let stratum_listen = socket(&mut r, "stratum", "listen", &stratum_default)?;
     let stratum_max_connections = int_in_range(
         &mut r,
@@ -1264,7 +1267,8 @@ pub fn default_config_text(network: Network) -> String {
                                # found by peers that dial in.
 
 [stratum]
-# listen = "0.0.0.0:{stratum}"      # the built-in solo stratum server
+# listen = "127.0.0.1:{stratum}"    # the built-in solo stratum server; this machine only.
+                               # "0.0.0.0:{stratum}" lets miners on other machines in.
 # max_connections = 256        # ceiling {ceiling}; raise LimitNOFILE with it
 #
 # Every limit below is settable. A limit of 0 means "no limit" for that line
@@ -1575,6 +1579,10 @@ mod tests {
         assert_eq!(c.rpc_listen.port(), k::PORT_RPC);
         assert_eq!(c.p2p_listen.port(), k::PORT_P2P);
         assert_eq!(c.stratum_listen.port(), k::PORT_STRATUM);
+        assert!(
+            c.stratum_listen.ip().is_loopback(),
+            "with no config the mining server must not be reachable from other machines"
+        );
         assert!(c.rpc_token.is_none());
         assert!(c.prune);
         assert!(!c.txindex);

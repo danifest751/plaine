@@ -38,9 +38,11 @@ change through; if a change needs to break one of them, it belongs in a separate
       rustfmt-clean, and reformatting it would turn every sync into conflicts.
 - [ ] Documentation updated. A new RPC method goes into `docs/rpc.md`.
 - [ ] An entry in `CHANGELOG.md` under *Unreleased*.
-- [ ] Anything that mines in a test does so gently: `--threads 2 --cpu-priority 0`.
-- [ ] If upstream could use it, it is also a single commit on top of `upstream/main` on a
-      `pr/*` branch.
+- [ ] Anything that mines in a test leaves the machine usable: the node test harness runs
+      the miner on all but two cores (`miner_threads()`), and `scripts/check.sh` is
+      started at low priority.
+- [ ] Nothing is proposed upstream. If the change fixes something upstream also has,
+      `FORK.md` describes it: the symptom, the cause, the fix and the test.
 - [ ] Everything in the repository is in English: code, comments, docs, commit messages.
 
 ## Commit messages
