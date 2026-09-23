@@ -1,6 +1,61 @@
+# Build output
 /target
 **/target
+*.pdb
+
+# ---------------------------------------------------------------------------
+# Key material. Nothing here may ever reach a commit.
+#
+# *.plnekey alone was not enough: the wallet writes whatever name --out is
+# given, and this project's own README says
+#
+#     plaine-wallet new --role spend --out miner.key --no-passphrase
+#
+# so following the quick-start inside a checkout leaves an unignored private
+# key in the working tree - and with `kdf: none` that file holds the seed in
+# the clear. The passphrase sources README documents (pass.txt,
+# --passphrase-file) are the same hazard.
+# ---------------------------------------------------------------------------
+*.key
 *.plnekey
+*.key.journal
 *.plnekey.journal
+pass.txt
+passphrase.txt
+passphrase*.txt
+*.seed
+*.backup
+
+# ---------------------------------------------------------------------------
+# Node state. Written into --data-dir, which defaults elsewhere but is often
+# pointed at a folder inside the checkout while testing. chain.redb and the
+# segment files reach gigabytes.
+# ---------------------------------------------------------------------------
+noded.toml
+noded.lock
+peers.dat
+chain.redb
+LOCK
+/segments/
+**/segments/
+*.redb
+
+# Miner
+miner.json
+
+# Logs
 *.log
+
+# Editors
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.*.rustfmt.toml
+
+# OS
 .DS_Store
+Thumbs.db
+desktop.ini
