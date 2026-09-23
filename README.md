@@ -61,8 +61,9 @@ plaine-noded
 ```
 
 A fresh node dials the built-in seed, pulls headers and then bodies, and starts
-following the chain. Its stratum server listens on port 9258 and its RPC on
-127.0.0.1:9257. `plaine-noded --help` lists the rest.
+following the chain. Its stratum server listens on 127.0.0.1:9258 and its RPC on
+127.0.0.1:9257. To mine from other machines, set `listen = "0.0.0.0:9258"` under
+`[stratum]` in the config. `plaine-noded --help` lists the rest.
 
 ## Mine
 

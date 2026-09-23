@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod bench;
 pub mod clock;
 pub mod conf;
@@ -5,6 +6,7 @@ pub mod cpu;
 pub mod pads;
 pub mod topo;
 
+use crate::client::work;
 use crate::client::Args;
 use pads::Ask;
 
@@ -39,6 +41,10 @@ pub struct Options {
     pub pages: Ask,
     pub bench_secs: u64,
     pub config_path: Option<String>,
+    /// An explicit --batch N. None means the machine decides; see `args::batch`.
+    pub batch: Option<usize>,
+    /// --no-pin: keep the upstream behaviour of letting the OS place the workers.
+    pub no_pin: bool,
 }
 
 impl Default for Options {
@@ -51,6 +57,8 @@ impl Default for Options {
             pages: Ask::Auto,
             bench_secs: DEFAULT_BENCH_SECS,
             config_path: None,
+            batch: None,
+            no_pin: false,
         }
     }
 }
@@ -72,6 +80,8 @@ pub struct Partial {
     pub verbose: Option<bool>,
     pub bench: Option<bool>,
     pub bench_secs: Option<u64>,
+    pub batch: Option<usize>,
+    pub no_pin: Option<bool>,
     pub print_topology: Option<bool>,
     pub grind: Option<String>,
     pub config: Option<String>,
@@ -97,6 +107,8 @@ impl Partial {
             verbose: self.verbose.or(lower.verbose),
             bench: self.bench.or(lower.bench),
             bench_secs: self.bench_secs.or(lower.bench_secs),
+            batch: self.batch.or(lower.batch),
+            no_pin: self.no_pin.or(lower.no_pin),
             print_topology: self.print_topology.or(lower.print_topology),
             grind: self.grind.or(lower.grind),
             config: self.config.or(lower.config),
@@ -200,6 +212,17 @@ fn resolve(
     if p.threads == Some(0) {
         notes.push("--threads 0 means one worker".into());
     }
+    if client.threads > work::MAX_WORKERS {
+        let asked = client.threads;
+        client.threads = work::MAX_WORKERS;
+        notes.push(format!(
+            "{asked} workers asked for, {} used: a worker owns one of {} nonce lanes, and \
+             workers past that repeat an earlier lane's nonces, which the server counts as \
+             duplicate shares and bans for",
+            work::MAX_WORKERS,
+            work::MAX_WORKERS
+        ));
+    }
 
     let action = if p.print_topology == Some(true) {
         Action::PrintTopology
@@ -233,6 +256,8 @@ fn resolve(
         pages: p.pages.unwrap_or_default(),
         bench_secs,
         config_path,
+        batch: p.batch,
+        no_pin: p.no_pin.unwrap_or(false),
     })
 }
 
@@ -289,6 +314,13 @@ fn parse_argv(argv: &[String]) -> Result<Partial, String> {
                 }
                 p.priority = Some(n as u8);
             }
+            "--batch" => {
+                let v = value("a slot count")?;
+                p.batch = Some(batch::check(
+                    int(&v, "--batch needs a positive integer")? as usize,
+                )?);
+            }
+            "--no-pin" => p.no_pin = Some(true),
             "--huge-pages" => p.pages = Some(Ask::Force),
             "--no-huge-pages" => p.pages = Some(Ask::Never),
             "--print-topology" => p.print_topology = Some(true),
@@ -377,6 +409,8 @@ fn from_config(pairs: &[(String, conf::Value)]) -> Result<Partial, String> {
             "address" => p.login = Some(text()?),
             "stratum" => p.stratum = Some(text()?),
             "threads" => p.threads = Some(num(u32::MAX as u64)? as usize),
+            "batch" => p.batch = Some(batch::check(num(u32::MAX as u64)? as usize)?),
+            "no-pin" => p.no_pin = Some(boolean()?),
             "cpu-affinity" => {
                 p.cpus = Some(match value {
                     Value::Str(s) => parse_cpu_list(s)?,
@@ -613,6 +647,13 @@ mod tests {
         parse(&argv, &mut Vec::new())
     }
 
+    // Same, but keeps the notes: some settings are adjusted rather than refused, and
+    // then the note is the only thing that tells the operator what happened.
+    fn args_with(v: &[&str], notes: &mut Vec<String>) -> Result<Options, String> {
+        let argv: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+        parse(&argv, notes)
+    }
+
     #[test]
     fn zero_config_is_one_token() {
         let u = ok("plne1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
@@ -703,7 +744,54 @@ mod tests {
     }
 
     #[test]
-    fn threads_and_affinity_conflict() {
+    fn pinning_is_the_default_and_no_pin_turns_it_off() {
+        assert!(!args(&["plne1abc"]).unwrap().no_pin, "pinning is on unless asked off");
+        assert!(args(&["plne1abc", "--no-pin"]).unwrap().no_pin);
+    }
+
+    #[test]
+    fn no_pin_is_accepted_from_the_config_file() {
+        let o = with_config(r#"{"address": "plne1file", "no-pin": true}"#, &[]).unwrap();
+        assert!(o.no_pin);
+        let e = with_config(r#"{"no-pin": "yes"}"#, &[]).unwrap_err();
+        assert!(e.contains("true or false"), "{e}");
+    }
+
+    #[test]
+    fn more_workers_than_nonce_lanes_are_capped() {
+        // A worker owns one of 2^THREAD_BITS lanes. Ask for more and worker
+        // MAX_WORKERS + k walks lane k's nonces exactly, which a server scores as
+        // duplicate shares: +25 banscore each, banned after four. Dual-socket parts
+        // with more than 256 threads exist and available_parallelism is the default,
+        // so the cap cannot just be documented.
+        let mut notes = Vec::new();
+        let o = args_with(
+            &["plne1abc", "--threads", &(work::MAX_WORKERS + 48).to_string()],
+            &mut notes,
+        )
+        .expect("an oversized thread count is capped, not refused");
+        assert_eq!(o.client.threads, work::MAX_WORKERS);
+        assert!(
+            notes.iter().any(|n| n.contains("duplicate shares")),
+            "the cap has to say why, not silently drop workers: {notes:?}"
+        );
+        assert!(
+            notes.iter().all(|n| !n.contains("  ")),
+            "a wrapped message must not print its source indentation: {notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_thread_count_inside_the_lane_space_is_left_alone() {
+        for n in [1usize, 2, 16, work::MAX_WORKERS - 1, work::MAX_WORKERS] {
+            let o = args(&["plne1abc", "--threads", &n.to_string()]).expect("legal");
+            assert_eq!(o.client.threads, n, "{n} workers fit and must not be touched");
+        }
+    }
+
+    #[test]
+fn threads_and_affinity_conflict() {
+
         let e = args(&["plne1abc", "--threads", "4", "--cpu-affinity", "0-3"]).unwrap_err();
         assert!(e.contains("--threads"), "{e}");
         assert!(e.contains("--cpu-affinity"), "{e}");

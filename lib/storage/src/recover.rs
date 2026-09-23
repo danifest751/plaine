@@ -164,6 +164,7 @@ fn open_inner(
             txn.open_table(INVALID_SEQ)?;
             txn.open_table(CHAINWORK_CKPT)?;
             txn.open_table(TXINDEX)?;
+            txn.open_table(ADDRINDEX)?;
             txn.open_table(HDR_UNDO)?;
             txn.open_table(STATE_CKPT)?;
             txn.open_table(BODY_ANCHOR)?;
@@ -375,6 +376,7 @@ fn open_inner(
         issued: m.issued,
         fingerprint: m.fingerprint,
         txindex_from: m.txindex_from,
+        addrindex_from: m.addrindex_from,
         hash_index_full_rows: m.hash_index_full_rows,
         hdr_damaged: !damage.header.is_empty(),
         body_damaged: !damage.body.is_empty(),

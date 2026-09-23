@@ -42,6 +42,24 @@ impl InvalidReason {
     }
 }
 
+/// Where one transaction touching an address sits in the chain.
+///
+/// A position, not a claim: rows outlive reorgs, so the caller must check the
+/// transaction at `index` in the body that is canonical at `height` now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddrHit {
+    pub height: u64,
+    pub index: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddrHistory {
+    /// The node was not started with addrindex, or has not indexed a block yet.
+    NotIndexed,
+    /// Newest first. `more` means at least one older hit exists past `hits`.
+    Page { indexed_from: u64, hits: Vec<AddrHit>, more: bool },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxLocation {
     Found { height: u64, index: u16 },

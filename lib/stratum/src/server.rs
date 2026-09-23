@@ -496,6 +496,7 @@ mod tests {
     use plaine_consensus::bech32m;
     use plaine_consensus::constants::ADDRESS_HRP;
     use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::net::TcpSocket;
 
     struct Rig {
         srv: Arc<StratumServer>,
@@ -1292,23 +1293,49 @@ mod tests {
 
     #[tokio::test]
     async fn stalled_write_closes_at_deadline() {
-        let l = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        // Fixed, small buffers on both ends. With the OS defaults the kernel is free to
+        // grow them: Windows auto-tunes the loopback receive window, so under load the
+        // "full" socket kept draining into the peer and the 64-byte flush below went
+        // through (about two runs in three with the rest of this module in parallel).
+        // Setting SO_SNDBUF/SO_RCVBUF explicitly turns that tuning off.
+        const SOCK_BUF: u32 = 16 * 1024;
+        let ls = TcpSocket::new_v4().expect("listener socket");
+        ls.set_recv_buffer_size(SOCK_BUF).expect("listener rcvbuf");
+        ls.bind("127.0.0.1:0".parse().expect("addr")).expect("bind");
+        let l = ls.listen(1).expect("listen");
         let a = l.local_addr().expect("addr");
-        let cli = TcpStream::connect(a).await.expect("connect");
+
+        let cs = TcpSocket::new_v4().expect("client socket");
+        cs.set_send_buffer_size(SOCK_BUF).expect("client sndbuf");
+        let cli = cs.connect(a).await.expect("connect");
 
         let (_peer, _) = l.accept().await.expect("accept");
         let (_r, mut w) = cli.into_split();
 
+        // Fill until the kernel refuses more, then keep checking for a while: a socket
+        // is only stalled once WouldBlock holds with the other side quiet, not at the
+        // first WouldBlock while buffered bytes are still moving to the peer.
         let block = [b'z'; 64 * 1024];
         let mut filled = 0usize;
+        let mut quiet = 0;
         for _ in 0..4096 {
             match w.try_write(&block) {
-                Ok(n) => filled += n,
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Ok(n) => {
+                    filled += n;
+                    quiet = 0;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    quiet += 1;
+                    if quiet == 5 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
                 Err(e) => panic!("unexpected write error while filling: {e}"),
             }
         }
         assert!(filled > 0, "nothing was written; the rig is not in the state under test");
+        assert_eq!(quiet, 5, "the socket never stopped accepting; the rig is not stalled");
 
         let deadline = Duration::from_millis(200);
         let mut out = vec![b'q'; 64];

@@ -22,6 +22,9 @@ pub struct Bench {
     pub cpus: Option<Vec<usize>>,
     pub pages: Ask,
     pub verbose: bool,
+    /// Nonces per W^X seal, see `args::batch`. A benchmark that does not report this is
+    /// not reproducible, so it goes in the header line and in CONDITIONS.
+    pub batch: usize,
 }
 
 struct Worker {
@@ -45,9 +48,15 @@ fn measure(b: &Bench, topo: &Topology) -> Result<Summary, String> {
 
     let warmup = if b.secs >= 5 { 1.0f64 } else { 0.5 };
 
+    // A hash rate measured on a JIT that does not compute Isochron is a number for
+    // nothing, so the benchmark takes the same gate the mining path does.
+    crate::client::preflight_verbose(b.verbose).map_err(|e| e.to_string())?;
+
+    let batch = b.batch.clamp(1, BATCH);
+
     println!("plaine-miner --bench");
     println!(
-        "  Isochron v1 - 64 KiB scratchpad, {BATCH} nonces per W^X seal, JIT\n"
+        "  Isochron v1 - 64 KiB scratchpad, {batch} nonces per W^X seal, JIT\n"
     );
     if cfg!(debug_assertions) {
         println!(
@@ -77,7 +86,7 @@ fn measure(b: &Bench, topo: &Topology) -> Result<Summary, String> {
         handles.push(
             std::thread::Builder::new()
                 .name(format!("plaine-bench-{i}"))
-                .spawn(move || worker(i, pin, ask, phase, counters))
+                .spawn(move || worker(i, pin, ask, phase, counters, batch))
                 .map_err(|e| format!("cannot spawn benchmark worker {i}: {e}"))?,
         );
     }
@@ -125,19 +134,21 @@ fn worker(
     ask: Ask,
     phase: Arc<AtomicU8>,
     counters: Arc<Vec<AtomicU64>>,
+    batch: usize,
 ) -> Result<Worker, String> {
     let placement = pin.map(|(c, g)| cpu::pin_current_thread(c, g));
     let mut miner = Miner::new().map_err(|e| format!("benchmark worker {index}: {e:?}"))?;
 
-    let mut pads = Pads::new(BATCH, ask.wanted())
+    let batch = batch.clamp(1, BATCH);
+    let mut pads = Pads::new(batch, ask.wanted())
         .map_err(|e| format!("benchmark worker {index} cannot map scratchpads: {e}"))?;
     let pages = pads.pages();
     let counter = super::clock::ThreadCounter::open();
 
     let header = [0u8; 132];
-    let mut seeds = [0u64; BATCH];
-    let mut digests = [0u64; BATCH];
-    let mut headers = [[0u8; 132]; BATCH];
+    let mut seeds = vec![0u64; batch];
+    let mut digests = vec![0u64; batch];
+    let mut headers = vec![[0u8; 132]; batch];
     let mut counter_value: u64 = 0;
 
     let mut sink: u64 = 0;
@@ -157,7 +168,7 @@ fn worker(
             }
             _ => {}
         }
-        for s in 0..BATCH {
+        for s in 0..batch {
             let nonce = ((index as u64) << 40) | counter_value;
             counter_value = counter_value.wrapping_add(1);
             headers[s] = header;
@@ -167,14 +178,14 @@ fn worker(
         miner
             .mine_hash_batch_on(&mut pads, &seeds, &mut digests)
             .map_err(|e| format!("benchmark worker {index}: JIT failure {e:?}"))?;
-        for s in 0..BATCH {
+        for s in 0..batch {
             let h = pow::pow_hash(&headers[s], digests[s]);
             sink ^= u64::from_le_bytes([h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]]);
         }
 
         sink = std::hint::black_box(sink);
         if measuring {
-            local += BATCH as u64;
+            local += batch as u64;
             counters[index].store(local, Ordering::Relaxed);
         }
     }
@@ -369,13 +380,20 @@ fn report(
     let pages = Summary::of(w.iter().map(|x| x.pages));
     println!("    page size      {}", page_line(b.pages, pages, cpu::page_size()));
     if pages.huge() < pages.total() {
-        println!("                   {}", cpu::huge_pages().state);
+        // Prefer what the allocator actually reported. huge_pages().state is a static
+        // explanation that names the privilege, and on a machine that holds it and
+        // failed for another reason that line sends the reader somewhere useless.
+        match crate::pad::last_note() {
+            Some(note) => println!("                   {note}"),
+            None => println!("                   {}", cpu::huge_pages().state),
+        }
     }
+    let batch = b.batch.clamp(1, BATCH);
     println!(
-        "    scratchpad     64 KiB per nonce x {BATCH} in flight = {} MiB per thread, \
+        "    scratchpad     64 KiB per nonce x {batch} in flight = {} KiB per thread, \
          {} MiB total",
-        BATCH * 64 / 1024,
-        w.len() * BATCH * 64 / 1024
+        batch * 64,
+        w.len() * batch * 64 / 1024
     );
     match observed {
         super::clock::Observed::Cycles { how, .. } => println!("    clock          {how}"),
@@ -452,20 +470,20 @@ mod tests {
 
     #[test]
     fn zero_window_is_refused() {
-        let b = Bench { secs: 0, threads: 1, cpus: None, pages: Ask::Auto, verbose: false };
+        let b = Bench { secs: 0, threads: 1, cpus: None, pages: Ask::Auto, verbose: false, batch: BATCH };
         assert!(run(&b, &Topology::detect()).is_err());
     }
 
     #[test]
     fn one_thread_produces_a_rate() {
-        let b = Bench { secs: 1, threads: 1, cpus: None, pages: Ask::Auto, verbose: true };
+        let b = Bench { secs: 1, threads: 1, cpus: None, pages: Ask::Auto, verbose: true, batch: BATCH };
         run(&b, &Topology::detect()).expect("the benchmark must run on its own machine");
     }
 
     #[test]
     fn conditions_count_regions_after_join() {
         let threads = 2;
-        let b = Bench { secs: 1, threads, cpus: None, pages: Ask::Auto, verbose: false };
+        let b = Bench { secs: 1, threads, cpus: None, pages: Ask::Auto, verbose: false, batch: BATCH };
         let topo = Topology::detect();
 
         let (held, err) = Pads::many(3, BATCH, false);

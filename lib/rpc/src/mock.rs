@@ -5,8 +5,8 @@ use crate::views::{
     AccountRecord, Address20, AuthorKeyStatus, AuthorNote, AuthorNotesPage, BlockRecord, BudgetView,
     Budgets, ChainInfo, ChainView, CheckpointLink, CheckpointStatus, CheckpointSubmit,
     EmissionAudit, FeeSuggestion,
-    Hash32, HeaderRecord, KeySource, MempoolInfo, MempoolView, NetView, Network, Node, NotesCursor,
-    PeerInfo, PolicyView, StratumSession, StratumView, SubmitError, SyncStatus, TxLookup, TxRecord,
+    Hash32, HeaderRecord, HistoryEntry, HistoryLookup, KeySource, MempoolInfo, MempoolView, NetView, Network, Node, NotesCursor,
+    PeerInfo, PolicyView, StratumSession, StratumView, SubmitError, SyncStatus, TxLocation, TxLookup, TxRecord,
     Verbosity,
 };
 
@@ -20,6 +20,7 @@ pub struct MockNode {
     sessions: Vec<StratumSession>,
     notes: Vec<AuthorNote>,
     txindex: bool,
+    tx_in_pruned_block: Option<u64>,
     pruned: bool,
     prune_horizon: u64,
     checkpoints_enabled: bool,
@@ -28,6 +29,8 @@ pub struct MockNode {
     checkpoint_link: CheckpointLink,
     checkpoint_submit: CheckpointSubmit,
     author_status: Option<AuthorKeyStatus>,
+    // None: the node runs without addrindex.
+    history: Option<(u64, Vec<HistoryEntry>)>,
 }
 
 impl MockNode {
@@ -41,6 +44,7 @@ impl MockNode {
             sessions: Vec::new(),
             notes: Vec::new(),
             txindex: false,
+            tx_in_pruned_block: None,
             pruned: false,
             prune_horizon: 0,
             checkpoints_enabled: true,
@@ -56,6 +60,7 @@ impl MockNode {
                 enforcing: true,
             },
             author_status: None,
+            history: None,
         }
     }
 
@@ -181,8 +186,22 @@ impl MockNode {
         self
     }
 
+    /// Runs with addrindex from `indexed_from`, holding `entries` in any order.
+    pub fn with_history(mut self, indexed_from: u64, entries: Vec<HistoryEntry>) -> MockNode {
+        self.history = Some((indexed_from, entries));
+        self
+    }
+
     pub fn with_txindex(mut self) -> MockNode {
         self.txindex = true;
+        self
+    }
+
+    /// With txindex: every lookup finds the transaction in a block at `height`
+    /// whose body is no longer stored.
+    pub fn with_tx_in_pruned_block(mut self, height: u64) -> MockNode {
+        self.txindex = true;
+        self.tx_in_pruned_block = Some(height);
         self
     }
 
@@ -328,7 +347,9 @@ impl ChainView for MockNode {
     }
 
     fn tx(&self, _txid: &Hash32) -> TxLookup {
-        if self.txindex {
+        if let Some(height) = self.tx_in_pruned_block {
+            TxLookup::Pruned { height }
+        } else if self.txindex {
             TxLookup::Absent
         } else {
             TxLookup::NotIndexed { indexed_from: None }
@@ -346,6 +367,43 @@ impl ChainView for MockNode {
             expected_by_formula_mile: issued,
             max_supply_mile: None,
             subsidy_at_height_mile: plaine_consensus::emission::block_reward(height),
+        })
+    }
+
+    fn account_history(
+        &self,
+        addr: &Address20,
+        before: Option<(u64, u16)>,
+        limit: usize,
+    ) -> HistoryLookup {
+        let Some((indexed_from, all)) = &self.history else {
+            return HistoryLookup::NotIndexed;
+        };
+        let _ = addr;
+        let mut sorted: Vec<&HistoryEntry> = all
+            .iter()
+            .filter(|e| before.is_none_or(|b| (e.height, e.index) < b))
+            .collect();
+        sorted.sort_by_key(|e| core::cmp::Reverse((e.height, e.index)));
+        let more = sorted.len() > limit;
+        let entries: Vec<HistoryEntry> = sorted.into_iter().take(limit).cloned().collect();
+        let next_cursor = if more { entries.last().map(|e| (e.height, e.index)) } else { None };
+        HistoryLookup::Page { indexed_from: *indexed_from, entries, next_cursor, unavailable_below: None }
+    }
+
+    fn tx_via_history(&self, txid: &Hash32, addr: &Address20) -> Option<TxLookup> {
+        let (indexed_from, all) = self.history.as_ref()?;
+        let _ = addr;
+        Some(match all.iter().find(|e| &e.txid == txid) {
+            Some(e) => TxLookup::Found(TxRecord {
+                txid: *txid,
+                type_byte: 0,
+                raw: Vec::new(),
+                location: TxLocation::Block { height: e.height, confirmations: e.confirmations },
+                decoded: Json::Null,
+            }),
+            None if *indexed_from == 0 => TxLookup::Absent,
+            None => TxLookup::NotIndexed { indexed_from: Some(*indexed_from) },
         })
     }
 

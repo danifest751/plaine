@@ -1,5 +1,5 @@
 use plaine_pow_mine::client::args::{self, Action, Options};
-use plaine_pow_mine::client::args::{bench, cpu, pads, topo};
+use plaine_pow_mine::client::args::{batch, bench, cpu, pads, topo};
 use plaine_pow_mine::client;
 
 fn usage() -> String {
@@ -29,12 +29,27 @@ CPU - which processors, not just how many\n\
 \x20 numbering is n/n+1 on most desktops but n/n+28 on a dual Broadwell, and a\n\
 \x20 pin list built on the wrong one silently measures the wrong thing.\n\
 \n\
-\x20 --threads <N>          N workers, placed by the OS. Default: every processor.\n\
+\x20 --threads <N>          N workers, placed by the OS. Default: every processor,\n\
+\x20                        capped at {} - a worker owns one of that many nonce\n\
+\x20                        lanes, and workers past it repeat an earlier lane's\n\
+\x20                        nonces, which a server counts as duplicate shares.\n\
 \x20 --cpu-affinity <list>  Which CPUs: 0,2,4,6 or 0-3,8-11. One worker per\n\
 \x20                        entry, so it already says how many - it cannot be\n\
 \x20                        combined with --threads. Pinning takes effect on Linux\n\
 \x20                        and Windows; macOS has no affinity API and the log\n\
 \x20                        says so.\n\
+\x20 --no-pin               Let the OS place the workers. By default they are\n\
+\x20                        pinned, one per core first, because a worker's 64 KiB\n\
+\x20                        pad lives in its core's private L2 and a thread the\n\
+\x20                        scheduler moves leaves its pad behind: 25.0 kH/s pinned\n\
+\x20                        against 23.3-23.7 unpinned on a Ryzen 7 8745HS.\n\
+\x20 --batch <N>            Nonces per W^X seal, 1..{}. Default: as many 64 KiB\n\
+\x20                        pads as half this thread's L2 share will hold, because\n\
+\x20                        every pad in a batch is filled before the first one\n\
+\x20                        runs. Too large and each hash starts by dragging its\n\
+\x20                        pad back from L3; too small and the seal stops paying\n\
+\x20                        for itself. Measured 27.1 kH/s at 4 against 24.9 at 32\n\
+\x20                        on a Ryzen 7 8745HS. --bench prints what was used.\n\
 \x20 --print-topology       Sockets, cores, SMT sibling numbering, performance\n\
 \x20                        and efficiency cores, L2 per core, and ready-made\n\
 \x20                        pin lists you can paste straight back in.\n\
@@ -98,9 +113,13 @@ EXAMPLES\n\
 \x20 plaine-miner --print-topology\n\
 \x20 plaine-miner --bench --bench-seconds 30\n\
 \x20 plaine-miner --bench --cpu-affinity 0,2,4,6      one thread per core\n\
+\x20 plaine-miner --bench --batch 4                   a smaller W^X batch\n\
+\x20 plaine-miner plne1you.rig1 --no-pin              let the OS place workers\n\
 \x20 plaine-miner plne1you.rig1@pool.example:9258 --cpu-priority 1\n\
 \x20 plaine-miner --config ~/.plaine/miner.json\n",
         env!("CARGO_PKG_VERSION"),
+        plaine_pow_mine::client::work::MAX_WORKERS,
+        plaine_pow_mine::BATCH,
         args::DEFAULT_BENCH_SECS,
     )
 }
@@ -138,6 +157,18 @@ fn main() -> std::process::ExitCode {
 
     let machine = topo::Topology::detect();
 
+    // Nonces per W^X seal: an explicit --batch, else whatever this machine's L2 will hold.
+    match opts.batch {
+        Some(n) => opts.client.batch = n,
+        None => {
+            let c = batch::auto(&machine, opts.client.threads);
+            opts.client.batch = c.batch;
+            if opts.client.verbose {
+                notes.push(format!("batch {} - {}", c.batch, c.why));
+            }
+        }
+    }
+
     if let Some(list) = opts.cpus.clone() {
         match args::check_cpu_list(&list, &machine) {
             Ok(more) => notes.extend(more),
@@ -145,6 +176,15 @@ fn main() -> std::process::ExitCode {
         }
 
         opts.client.pins = Some(cpu::resolve_pins(&list, &machine));
+    } else if !opts.no_pin {
+        // Default to pinning. An unpinned worker's pad is dragged between L2s every time
+        // the scheduler moves it; measured at 23.3-23.7 kH/s unpinned against 25.0 pinned
+        // on this machine. --no-pin restores the upstream behaviour.
+        let list: Vec<usize> = machine.spread().into_iter().take(opts.client.threads).collect();
+        if !list.is_empty() {
+            opts.client.pins = Some(cpu::resolve_pins(&list, &machine));
+            opts.cpus = Some(list);
+        }
     }
     for n in &notes {
         eprintln!("plaine-miner: {n}");
@@ -221,6 +261,7 @@ fn run_bench(opts: &Options, machine: &topo::Topology) -> std::process::ExitCode
         cpus: opts.cpus.clone(),
         pages: opts.pages,
         verbose: opts.client.verbose,
+        batch: opts.client.batch,
     };
     match bench::run(&b, machine) {
         Ok(()) => std::process::ExitCode::SUCCESS,

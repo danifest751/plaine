@@ -20,7 +20,7 @@ mod types;
 pub use committer::{Committer, ANCHOR_RECORD_CAP_BYTES};
 pub use config::{autotune_batch, dirty_fraction, DurabilityMode, MemoryBudget, Network, StoreConfig};
 pub use crc32c::crc32c;
-pub use error::{InvalidReason, StoreError, TxLocation};
+pub use error::{AddrHistory, AddrHit, InvalidReason, StoreError, TxLocation};
 pub use integrity::{
     BodyVouch, DamageKind, DamagedRange, IntegrityReport, RangeAvailability, SegmentKind,
     UnverifiableCause,

@@ -29,7 +29,7 @@ fn record(sk: &SigningKey, height: u64, hash: [u8; 32]) -> String {
 fn write_config_with_key(dir: &Path, data: &Path, pubkey_hex: &str) -> std::path::PathBuf {
     let text = format!(
         "[node]\nnetwork = \"main\"\ndata_dir = {:?}\n\n\
-         [p2p]\nlisten = \"127.0.0.1:{P2P}\"\nseeds = []\n\n\
+         [p2p]\nlisten = \"127.0.0.1:{P2P}\"\nseeds = []\nuse_embedded_seeds = false\n\n\
          [rpc]\nlisten = \"127.0.0.1:{RPC}\"\n\n\
          [stratum]\nlisten = \"127.0.0.1:{STRATUM}\"\n\n\
          [checkpoints]\nenabled = true\nthreshold = 1\nkeys = [\"{pubkey_hex}\"]\n",

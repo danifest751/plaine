@@ -1,12 +1,13 @@
 use crate::json::Json;
 use crate::jsonrpc::{
-    self, hash_param, opt_u64_param, param_count, str_param, u64_param, ErrorCode, Request,
-    RpcError,
+    self, hash_param, opt_u64_param, param, param_count, str_param, u64_param, ErrorCode,
+    Request, RpcError,
 };
 use crate::notes;
 use crate::views::{
-    Address20, BlockRecord, CheckpointLink, CheckpointSubmit, HeaderRecord, Network, Node,
-    NotesCursor, TxLocation, TxLookup, TxRecord, Verbosity,
+    Address20, BlockRecord, CheckpointLink, CheckpointSubmit, Direction, HeaderRecord,
+    HistoryKind, HistoryLookup, Network, Node, NotesCursor, TxLocation, TxLookup, TxRecord,
+    Verbosity,
 };
 
 // the whole RPC surface, and it's closed. dispatch() and unknown_method() both read this list.
@@ -26,12 +27,17 @@ pub const METHODS: &[&str] = &[
     "checkpoint_getStatus",
     "checkpoint_submit",
     "author_getNotes",
+    "account_getHistory",
     "net_getPeerInfo",
     "stratum_getSessions",
     "node_getBudgets",
 ];
 
 pub const NOTES_DEFAULT_LIMIT: usize = 20;
+
+pub const HISTORY_DEFAULT_LIMIT: usize = 50;
+
+pub const HISTORY_MAX_LIMIT: usize = 200;
 
 pub const NOTES_MAX_LIMIT: usize = 100;
 
@@ -52,6 +58,7 @@ pub fn dispatch(node: &Node, req: &Request) -> Result<Json, RpcError> {
         "checkpoint_getStatus" => checkpoint_get_status(node),
         "checkpoint_submit" => checkpoint_submit(node, &req.params),
         "author_getNotes" => author_get_notes(node, &req.params),
+        "account_getHistory" => account_get_history(node, &req.params),
         "net_getPeerInfo" => net_get_peer_info(node),
         "stratum_getSessions" => stratum_get_sessions(node),
         "node_getBudgets" => node_get_budgets(node),
@@ -418,10 +425,56 @@ fn tx_send_raw(node: &Node, params: &Json) -> Result<Json, RpcError> {
 }
 
 fn tx_get(node: &Node, params: &Json) -> Result<Json, RpcError> {
-    arity(params, 1, "tx_get")?;
+    arity(params, 2, "tx_get")?;
     let txid = hash_param(params, 0, "txid")?;
-    match node.chain.tx(&txid) {
+    let via = match param(params, 1, "address") {
+        None | Some(Json::Null) => None,
+        Some(_) => Some(address_param(node, params, 1, "address")?),
+    };
+    let mut lookup = node.chain.tx(&txid);
+
+    // Without a txid index, an address the transaction touches lets the address
+    // index answer instead: how a wallet follows its own transactions.
+    if let (TxLookup::NotIndexed { .. }, Some(addr)) = (&lookup, via) {
+        match node.chain.tx_via_history(&txid, &addr) {
+            Some(found @ (TxLookup::Found(_) | TxLookup::Pruned { .. })) => lookup = found,
+            Some(TxLookup::Absent) => return Err(RpcError::detail(
+                ErrorCode::NotFound,
+                "no transaction with that id is in the mempool or among the confirmed \
+                 transactions that touch that address",
+            )),
+            Some(TxLookup::NotIndexed { indexed_from }) => return Err(RpcError::detail(
+                ErrorCode::FeatureDisabled,
+                format!(
+                    "not in the mempool, and not among the transactions that touch that \
+                     address from height {} on, which is as far back as this node can see - \
+                     it cannot say whether it exists below that. Resync with \
+                     `addrindex = true`, or `txindex = true`, to cover the whole chain.",
+                    indexed_from.unwrap_or(0)
+                ),
+            )),
+            None => return Err(RpcError::detail(
+                ErrorCode::FeatureDisabled,
+                "not in the mempool or the recent blocks this node keeps at hand, and this \
+                 node keeps neither a txid index nor an address index to look further. \
+                 Start it with `addrindex = true` to find transactions by an address they \
+                 touch, or `txindex = true` to find any by id; either then needs a resync \
+                 to cover past blocks.",
+            )),
+        }
+    }
+
+    match lookup {
         TxLookup::Found(t) => Ok(tx_json(&t)),
+
+        TxLookup::Pruned { height } => Err(RpcError::detail(
+            ErrorCode::FeatureDisabled,
+            format!(
+                "the txid index places this transaction in block {height}, whose body this \
+                 pruned node no longer stores. Its header is kept; an archive node \
+                 (`prune = false`) can return the transaction."
+            ),
+        )),
 
         TxLookup::Absent => {
             Err(RpcError::detail(ErrorCode::NotFound, "no transaction with that id"))
@@ -430,7 +483,9 @@ fn tx_get(node: &Node, params: &Json) -> Result<Json, RpcError> {
             ErrorCode::FeatureDisabled,
             "not in the mempool, and this node has no txid index, so confirmed \
              transactions cannot be looked up by id. Start with `txindex = true` \
-             - it must then resync to build the index.",
+             - it must then resync to build the index. With `addrindex = true`, \
+             passing an address the transaction touches as the second parameter \
+             works too.",
         )),
 
         TxLookup::NotIndexed { indexed_from: Some(from) } => Err(RpcError::detail(
@@ -700,6 +755,128 @@ fn checkpoint_submit(node: &Node, params: &Json) -> Result<Json, RpcError> {
     }
 }
 
+fn history_cursor(s: &str) -> Option<(u64, u16)> {
+    let (h, i) = s.split_once(':')?;
+    Some((h.parse().ok()?, i.parse().ok()?))
+}
+
+fn account_get_history(node: &Node, params: &Json) -> Result<Json, RpcError> {
+    arity(params, 3, "account_getHistory")?;
+    let addr = address_param(node, params, 0, "address")?;
+    let limit = match opt_u64_param(params, 1, "limit")? {
+        None => HISTORY_DEFAULT_LIMIT,
+        Some(0) => {
+            return Err(RpcError::detail(
+                ErrorCode::InvalidParams,
+                format!("`limit` of 0 returns nothing; omit it for the default of {HISTORY_DEFAULT_LIMIT}"),
+            ))
+        }
+        Some(n) if n as usize > HISTORY_MAX_LIMIT => {
+            return Err(RpcError::detail(
+                ErrorCode::InvalidParams,
+                format!("`limit` must be 1..={HISTORY_MAX_LIMIT}, got {n}"),
+            ))
+        }
+        Some(n) => n as usize,
+    };
+    let before = match param(params, 2, "cursor") {
+        None | Some(Json::Null) => None,
+        Some(Json::Str(s)) => Some(history_cursor(s).ok_or_else(|| {
+            RpcError::detail(
+                ErrorCode::InvalidParams,
+                format!(
+                    "`cursor` {s:?} is not a position: pass back the `nextCursor` string an \
+                     earlier page returned, which looks like \"1234:0\""
+                ),
+            )
+        })?),
+        Some(_) => {
+            return Err(RpcError::detail(
+                ErrorCode::InvalidParams,
+                "`cursor` must be the `nextCursor` string from an earlier page",
+            ))
+        }
+    };
+
+    match node.chain.account_history(&addr, before, limit) {
+        HistoryLookup::NotIndexed => Err(RpcError::detail(
+            ErrorCode::FeatureDisabled,
+            "this node keeps no address index, so it cannot list an address's confirmed \
+             transactions. Start it with `addrindex = true`; blocks connected from then on are \
+             indexed, and a resync covers the whole chain. account_get still answers the \
+             balance and nonce.",
+        )),
+        HistoryLookup::Page { indexed_from, entries, next_cursor, unavailable_below } => {
+            let rows: Vec<Json> = entries
+                .iter()
+                .map(|e| {
+                    Json::Obj(vec![
+                        ("txid".into(), hex32(&e.txid)),
+                        ("height".into(), Json::u64(e.height)),
+                        ("index".into(), Json::u64(e.index as u64)),
+                        ("time".into(), Json::u64(e.time)),
+                        ("confirmations".into(), Json::u64(e.confirmations)),
+                        (
+                            "kind".into(),
+                            Json::str(match e.kind {
+                                HistoryKind::Coinbase => "coinbase",
+                                HistoryKind::Transfer => "transfer",
+                                HistoryKind::Announcement => "announcement",
+                            }),
+                        ),
+                        (
+                            "direction".into(),
+                            Json::str(match e.direction {
+                                Direction::In => "in",
+                                Direction::Out => "out",
+                                Direction::SelfTransfer => "self",
+                            }),
+                        ),
+                        ("amountMile".into(), Json::mile(e.amount_mile)),
+                        ("feeMile".into(), Json::mile(e.fee_mile)),
+                        (
+                            "counterparty".into(),
+                            match e.counterparty {
+                                Some(a) => Json::str(plaine_consensus::crypto::encode_address(&a)),
+                                None => Json::Null,
+                            },
+                        ),
+                    ])
+                })
+                .collect();
+            let mut members = vec![
+                ("address".into(), Json::str(plaine_consensus::crypto::encode_address(&addr))),
+                ("indexedFrom".into(), Json::u64(indexed_from)),
+                ("entries".into(), Json::Arr(rows)),
+                (
+                    "nextCursor".into(),
+                    match next_cursor {
+                        Some((h, i)) => Json::str(format!("{h}:{i}")),
+                        None => Json::Null,
+                    },
+                ),
+            ];
+            let mut hints = Vec::new();
+            if let Some(h) = unavailable_below {
+                hints.push(format!(
+                    "entries below height {h} were skipped: their block bodies are no longer \
+                     stored on this pruned node, so the history there is incomplete"
+                ));
+            }
+            if indexed_from > 0 && next_cursor.is_none() {
+                hints.push(format!(
+                    "the address index begins at height {indexed_from}; anything older is not \
+                     listed. Resync with `addrindex = true` to cover the whole chain"
+                ));
+            }
+            if !hints.is_empty() {
+                members.push(("hint".into(), Json::str(hints.join(". "))));
+            }
+            Ok(Json::Obj(members))
+        }
+    }
+}
+
 fn author_get_notes(node: &Node, params: &Json) -> Result<Json, RpcError> {
     arity(params, 3, "author_getNotes")?;
     let from_height = opt_u64_param(params, 0, "fromHeight")?;
@@ -931,6 +1108,7 @@ mod tests {
             "checkpoint_getStatus",
             "checkpoint_submit",
             "author_getNotes",
+            "account_getHistory",
             "net_getPeerInfo",
             "stratum_getSessions",
             "node_getBudgets",
@@ -1547,6 +1725,115 @@ mod tests {
         assert_eq!(e.data, Some(Json::str("malformed")));
     }
 
+    fn history_entry(height: u64, index: u16, kind: HistoryKind, direction: Direction) -> crate::views::HistoryEntry {
+        crate::views::HistoryEntry {
+            txid: [height as u8; 32],
+            height,
+            index,
+            time: 1_700_000_000 + height * 60,
+            confirmations: 12_345 - height + 1,
+            kind,
+            direction,
+            amount_mile: 200_000 + index as u128,
+            fee_mile: if kind == HistoryKind::Coinbase { 0 } else { 1_000 },
+            counterparty: if kind == HistoryKind::Transfer { Some([0x22; 20]) } else { None },
+        }
+    }
+
+    fn history_address() -> Json {
+        Json::str(plaine_consensus::crypto::encode_address(&[0x11; 20]))
+    }
+
+    #[test]
+    fn history_without_addrindex_explains() {
+        let node = MockNode::synced().into_node();
+        let e = call(&node, "account_getHistory", Json::Arr(vec![history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::FeatureDisabled);
+        let d = e.detail.unwrap();
+        assert!(d.contains("addrindex = true"), "must name the switch: {d}");
+        assert!(d.contains("account_get"), "must point at what still works: {d}");
+    }
+
+    #[test]
+    fn history_renders_every_field() {
+        let node = MockNode::synced()
+            .with_history(0, vec![
+                history_entry(9, 1, HistoryKind::Transfer, Direction::In),
+                history_entry(9, 0, HistoryKind::Coinbase, Direction::In),
+            ])
+            .into_node();
+        let v = call(&node, "account_getHistory", Json::Arr(vec![history_address()])).unwrap();
+        let text = v.to_string();
+        assert!(text.contains(r#""kind":"transfer""#), "{text}");
+        assert!(text.contains(r#""kind":"coinbase""#), "{text}");
+        assert!(text.contains(r#""direction":"in""#), "{text}");
+        assert!(text.contains(r#""amountMile":"200001""#), "amounts are strings: {text}");
+        assert!(text.contains(r#""feeMile":"0""#), "a coinbase pays no fee: {text}");
+        let peer = plaine_consensus::crypto::encode_address(&[0x22; 20]);
+        assert!(text.contains(&format!(r#""counterparty":"{peer}""#)), "{text}");
+        assert!(text.contains(r#""counterparty":null"#), "a coinbase has no counterparty: {text}");
+        assert!(text.contains(r#""nextCursor":null"#), "{text}");
+        assert!(!text.contains("hint"), "a full history from genesis needs no hint: {text}");
+        let first = text.find(r#""index":1"#).expect("index 1 present");
+        let second = text.find(r#""index":0"#).expect("index 0 present");
+        assert!(first < second, "newest first: (9,1) before (9,0): {text}");
+    }
+
+    #[test]
+    fn history_pages_with_the_cursor_it_hands_out() {
+        let node = MockNode::synced()
+            .with_history(0, vec![
+                history_entry(3, 0, HistoryKind::Coinbase, Direction::In),
+                history_entry(5, 2, HistoryKind::Transfer, Direction::Out),
+                history_entry(7, 0, HistoryKind::Coinbase, Direction::In),
+            ])
+            .into_node();
+        let p1 = call(&node, "account_getHistory", Json::Arr(vec![history_address(), Json::u64(2)]))
+            .unwrap()
+            .to_string();
+        assert!(p1.contains(r#""height":7"#) && p1.contains(r#""height":5"#), "{p1}");
+        assert!(!p1.contains(r#""height":3"#), "{p1}");
+        assert!(p1.contains(r#""nextCursor":"5:2""#), "{p1}");
+
+        let p2 = call(
+            &node,
+            "account_getHistory",
+            Json::Arr(vec![history_address(), Json::u64(2), Json::str("5:2")]),
+        )
+        .unwrap()
+        .to_string();
+        assert!(p2.contains(r#""height":3"#), "{p2}");
+        assert!(!p2.contains(r#""height":5"#), "the cursor itself is not repeated: {p2}");
+        assert!(p2.contains(r#""nextCursor":null"#), "{p2}");
+    }
+
+    #[test]
+    fn history_says_where_the_index_begins() {
+        let node = MockNode::synced()
+            .with_history(4_000, vec![history_entry(4_100, 0, HistoryKind::Coinbase, Direction::In)])
+            .into_node();
+        let v = call(&node, "account_getHistory", Json::Arr(vec![history_address()])).unwrap().to_string();
+        assert!(v.contains(r#""indexedFrom":4000"#), "{v}");
+        assert!(v.contains("begins at height 4000"), "the last page must say older is missing: {v}");
+    }
+
+    #[test]
+    fn history_refuses_bad_parameters_precisely() {
+        let node = MockNode::synced().with_history(0, Vec::new()).into_node();
+        for (params, needle) in [
+            (vec![Json::str("plne1notanaddress")], "bech32m"),
+            (vec![history_address(), Json::u64(0)], "limit"),
+            (vec![history_address(), Json::u64(201)], "1..=200"),
+            (vec![history_address(), Json::Null, Json::str("abc")], "nextCursor"),
+            (vec![history_address(), Json::Null, Json::u64(5)], "nextCursor"),
+        ] {
+            let e = call(&node, "account_getHistory", Json::Arr(params.clone())).unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidParams, "{params:?}");
+            let d = e.detail.unwrap_or_default();
+            assert!(d.contains(needle), "{params:?}: {d}");
+        }
+    }
+
     #[test]
     fn tx_get_without_txindex_explains() {
         let node = MockNode::synced().into_node();
@@ -1578,6 +1865,72 @@ mod tests {
         assert!(detail.contains("no transaction with that id"), "{detail}");
 
         assert!(!detail.contains("txindex"), "{detail}");
+    }
+
+    #[test]
+    fn tx_get_in_a_pruned_block_blames_pruning_not_the_index() {
+        let node = MockNode::synced().with_tx_in_pruned_block(812).into_node();
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7)])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::FeatureDisabled);
+        let d = e.detail.unwrap();
+        assert!(d.contains("block 812") && d.contains("pruned"), "{d}");
+        assert!(!d.contains("index begins"), "the index is complete; pruning is the cause: {d}");
+    }
+
+    fn txid_param(byte: u8) -> Json {
+        Json::str(plaine_consensus::hex::encode(&[byte; 32]))
+    }
+
+    #[test]
+    fn tx_get_finds_a_confirmed_tx_through_the_address_index() {
+        let node = MockNode::synced()
+            .with_history(0, vec![history_entry(7, 1, HistoryKind::Transfer, Direction::Out)])
+            .into_node();
+        let v = call(&node, "tx_get", Json::Arr(vec![txid_param(7), history_address()])).unwrap();
+        let text = v.to_string();
+        assert!(text.contains(r#""where":"block""#), "{text}");
+        assert!(text.contains(r#""height":7"#), "{text}");
+        assert!(text.contains(&"07".repeat(32)), "{text}");
+    }
+
+    #[test]
+    fn tx_get_through_the_address_index_says_what_it_searched() {
+        let full = MockNode::synced()
+            .with_history(0, vec![history_entry(7, 1, HistoryKind::Transfer, Direction::Out)])
+            .into_node();
+        let e = call(&full, "tx_get", Json::Arr(vec![txid_param(8), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound, "an index from genesis can say no");
+        assert!(e.detail.unwrap().contains("touch that address"));
+
+        let late = MockNode::synced()
+            .with_history(500, vec![history_entry(700, 0, HistoryKind::Transfer, Direction::In)])
+            .into_node();
+        let e = call(&late, "tx_get", Json::Arr(vec![txid_param(8), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::FeatureDisabled, "an index from 500 cannot say no");
+        let d = e.detail.unwrap();
+        assert!(d.contains("from height 500"), "{d}");
+    }
+
+    #[test]
+    fn tx_get_with_an_address_but_no_index_names_both_switches() {
+        let node = MockNode::synced().into_node();
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::FeatureDisabled);
+        let d = e.detail.unwrap();
+        assert!(d.contains("addrindex = true") && d.contains("txindex = true"), "{d}");
+    }
+
+    #[test]
+    fn tx_get_prefers_the_txid_index_and_checks_the_address() {
+        // With txindex the answer is the txid index's; the address is still
+        // validated, so a typo is reported rather than silently ignored.
+        let node = MockNode::synced().with_txindex().into_node();
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound);
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), Json::str("plne1nope")])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidParams);
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), Json::Null, Json::Null])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidParams, "at most two parameters");
     }
 
     #[test]

@@ -152,6 +152,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub prune: bool,
     pub txindex: bool,
+    pub addrindex: bool,
     pub verify_frames: bool,
     pub p2p_listen: SocketAddr,
     pub max_peers: usize,
@@ -226,6 +227,7 @@ const SCHEMA: &[Field] = &[
     Field { section: "node", key: "data_dir", kind: Kind::Str },
     Field { section: "node", key: "prune", kind: Kind::Bool },
     Field { section: "node", key: "txindex", kind: Kind::Bool },
+    Field { section: "node", key: "addrindex", kind: Kind::Bool },
     Field { section: "node", key: "verify_frames", kind: Kind::Bool },
     Field { section: "p2p", key: "listen", kind: Kind::Str },
     Field { section: "p2p", key: "max_peers", kind: Kind::Int },
@@ -573,7 +575,16 @@ fn build(path: &str, doc: &Document, ov: &Overrides) -> Result<Config, Diagnosti
 
     let prune = r.bool("node", "prune", true);
     let txindex = r.bool("node", "txindex", false);
+    let addrindex = r.bool("node", "addrindex", false);
     let verify_frames = r.bool("node", "verify_frames", false);
+    if addrindex && prune {
+        warnings.push(
+            "node.addrindex = true with node.prune = true: account_getHistory can only describe \
+             transactions whose block bodies are still stored (the last 525960). Set \
+             prune = false for a full history."
+                .into(),
+        );
+    }
     if txindex && prune {
         warnings.push(
             "node.txindex = true with node.prune = true: the index only covers blocks whose \
@@ -630,7 +641,10 @@ fn build(path: &str, doc: &Document, ov: &Overrides) -> Result<Config, Diagnosti
         ));
     }
 
-    let stratum_default = format!("0.0.0.0:{}", k::PORT_STRATUM);
+    // Loopback by default: the common setup mines on the node's own machine, and a
+    // node started with no config should not open a mining server to the internet.
+    // Miners on other machines, or a pool front-end, need `listen = "0.0.0.0:9258"`.
+    let stratum_default = format!("127.0.0.1:{}", k::PORT_STRATUM);
     let stratum_listen = socket(&mut r, "stratum", "listen", &stratum_default)?;
     let stratum_max_connections = int_in_range(
         &mut r,
@@ -1101,6 +1115,7 @@ fn build(path: &str, doc: &Document, ov: &Overrides) -> Result<Config, Diagnosti
         data_dir,
         prune,
         txindex,
+        addrindex,
         verify_frames,
         p2p_listen,
         max_peers,
@@ -1222,6 +1237,10 @@ pub fn default_config_text(network: Network) -> String {
 # txindex = false              # index every txid so tx_get can find confirmed
                                # transactions. Costs ~0.9 GB/year and requires
                                # a resync to build.
+# addrindex = false            # index which transactions touch each address, so
+                               # account_getHistory can list them (the desktop
+                               # wallet needs it). Covers blocks connected after
+                               # it is switched on; resync for the full chain.
 # verify_frames = false        # the two deep integrity sweeps at boot.
                                # L2 (bodies): re-checks every frame of every
                                # sealed body segment against its anchor. Catches
@@ -1248,7 +1267,8 @@ pub fn default_config_text(network: Network) -> String {
                                # found by peers that dial in.
 
 [stratum]
-# listen = "0.0.0.0:{stratum}"      # the built-in solo stratum server
+# listen = "127.0.0.1:{stratum}"    # the built-in solo stratum server; this machine only.
+                               # "0.0.0.0:{stratum}" lets miners on other machines in.
 # max_connections = 256        # ceiling {ceiling}; raise LimitNOFILE with it
 #
 # Every limit below is settable. A limit of 0 means "no limit" for that line
@@ -1456,6 +1476,7 @@ impl Config {
             ("node", "data_dir") => format!("{:?}", self.data_dir.display().to_string()),
             ("node", "prune") => self.prune.to_string(),
             ("node", "txindex") => self.txindex.to_string(),
+            ("node", "addrindex") => self.addrindex.to_string(),
             ("node", "verify_frames") => self.verify_frames.to_string(),
             ("p2p", "listen") => format!("{:?}", self.p2p_listen.to_string()),
             ("p2p", "max_peers") => self.max_peers.to_string(),
@@ -1558,6 +1579,10 @@ mod tests {
         assert_eq!(c.rpc_listen.port(), k::PORT_RPC);
         assert_eq!(c.p2p_listen.port(), k::PORT_P2P);
         assert_eq!(c.stratum_listen.port(), k::PORT_STRATUM);
+        assert!(
+            c.stratum_listen.ip().is_loopback(),
+            "with no config the mining server must not be reachable from other machines"
+        );
         assert!(c.rpc_token.is_none());
         assert!(c.prune);
         assert!(!c.txindex);

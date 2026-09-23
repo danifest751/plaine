@@ -170,6 +170,15 @@ impl NodeStore {
         None
     }
 
+    pub fn addr_history(
+        &self,
+        addr: &[u8; 20],
+        before: Option<(u64, u16)>,
+        limit: usize,
+    ) -> Option<plaine_storage::AddrHistory> {
+        self.reader.addr_history(addr, before, limit).ok()
+    }
+
     pub fn txindex_lookup(&self, txid: &Hash32) -> plaine_storage::TxLocation {
         match self.reader.txindex_lookup(txid) {
             Ok(l) => l,
@@ -589,10 +598,8 @@ impl Sink for CommitSink {
         let plan = ReorgPlan { fork_height, rollback: &p.rollback, apply: &plans };
         let r = c.reorg(&plan).map_err(storage_err)?;
         drop(c);
-        for b in &p.apply {
-            self.notes.on_block(b.height, b.hash, &b.body);
-        }
-        self.notes.rollback_above(fork_height);
+        self.notes
+            .on_reorg(fork_height, p.apply.iter().map(|b| (b.height, b.hash, b.body.as_slice())));
         let mut s = self.stats.lock().expect("stats");
         s.reorgs += 1;
         s.blocks += p.apply.len() as u64;
@@ -627,10 +634,8 @@ impl Sink for CommitSink {
         };
         let r = c.deep_reorg(&plan).map_err(storage_err)?;
         drop(c);
-        for b in &p.apply {
-            self.notes.on_block(b.height, b.hash, &b.body);
-        }
-        self.notes.rollback_above(fork_height);
+        self.notes
+            .on_reorg(fork_height, p.apply.iter().map(|b| (b.height, b.hash, b.body.as_slice())));
         let mut s = self.stats.lock().expect("stats");
         s.reorgs += 1;
         s.blocks += p.apply.len() as u64;
@@ -733,6 +738,65 @@ pub(crate) mod tests {
         let cfg = plaine_storage::StoreConfig::new(dir.clone(), plaine_storage::Network::Main);
         let (c, r) = open_for_test(cfg);
         (dir, c, r)
+    }
+
+    /// A store whose best chain is `blocks` (height, hash, body), all still in the ring.
+    pub(crate) fn store_with_ring(
+        blocks: Vec<(u64, Hash32, Vec<u8>)>,
+    ) -> (std::path::PathBuf, plaine_storage::Committer, NodeStore) {
+        let (dir, committer, reader) = temp_store();
+        let ring = new_ring();
+        let store = NodeStore::new(reader, Arc::clone(&ring));
+        for (height, hash, body) in blocks {
+            ring.write().expect("ring").push(Entry {
+                height,
+                hash,
+                header: [0u8; HEADER_BYTES],
+                body,
+                deltas: Vec::new(),
+                undo: Vec::new(),
+                issued_delta: 0,
+            });
+        }
+        (dir, committer, store)
+    }
+
+    /// A store whose best chain holds a one-coinbase block `canonical` at `height`
+    /// (still in the ring), and whose side-header table holds `side` at the same
+    /// height: the shape a fork leaves behind.
+    pub(crate) fn store_with_fork(
+        height: u64,
+        canonical: Hash32,
+        side: Hash32,
+    ) -> (std::path::PathBuf, plaine_storage::Committer, NodeStore) {
+        use plaine_consensus::codec::{AuthorNote, BlockBody, CoinbaseTx};
+        let (dir, mut committer, reader) = temp_store();
+        let ring = new_ring();
+        let store = NodeStore::new(reader, Arc::clone(&ring));
+        let cb = CoinbaseTx {
+            height,
+            to: [0x77; 20],
+            reward: plaine_consensus::emission::block_reward(height),
+            fees: 0,
+            note: AuthorNote { encoding: 0x01, payload: b"best".to_vec() },
+        };
+        let rec = cb.encode().expect("encode");
+        ring.write().expect("ring").push(Entry {
+            height,
+            hash: canonical,
+            header: [0u8; HEADER_BYTES],
+            body: BlockBody::encode(&[rec.as_slice()]).expect("body"),
+            deltas: Vec::new(),
+            undo: Vec::new(),
+            issued_delta: 0,
+        });
+        let mut hdr = [0u8; HEADER_BYTES];
+        hdr[4..12].copy_from_slice(&height.to_le_bytes());
+        committer
+            .put_side_headers(&[(side, hdr, height, plaine_storage::HeaderStatus::Connected)])
+            .expect("side header");
+        committer.flush().expect("flush");
+        (dir, committer, store)
     }
 
     #[test]

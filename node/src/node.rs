@@ -204,6 +204,7 @@ pub fn start(cfg: &Config, paths: &Paths) -> Result<Node, StartError> {
     );
     store_cfg.prune = cfg.prune;
     store_cfg.txindex = cfg.txindex;
+    store_cfg.addrindex = cfg.addrindex;
 
     store_cfg.ibd_batch_blocks = Some(RING_MAX_BLOCKS as u32);
 
@@ -727,6 +728,16 @@ pub fn start(cfg: &Config, paths: &Paths) -> Result<Node, StartError> {
             k::ADDRESS_HRP
         ),
     );
+    if stratum_addr.ip().is_loopback() {
+        log::info(
+            "stratum",
+            format!(
+                "only miners on this machine can connect; for other machines set \
+                 [stratum] listen = \"0.0.0.0:{}\"",
+                stratum_addr.port()
+            ),
+        );
+    }
 
     Ok(Node {
         tx,
@@ -794,6 +805,9 @@ impl Node {
                 tx: self.tx.clone(),
                 relay_fee_mile: cfg.relay_fee_mile,
                 max_txs: cfg.mempool_max_txs,
+                store: Arc::clone(&self.store),
+                tip: self.tip.clone(),
+                fee_cache: std::sync::Mutex::new(None),
             }),
             net: Arc::new(RpcNet { peers: Arc::clone(&self.peer_info) }),
             stratum: Arc::new(RpcStratum { server: self.stratum.clone() }),

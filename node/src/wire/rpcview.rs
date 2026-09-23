@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use plaine_rpc::views::{
     AccountRecord, Address20, AuthorKeyStatus, AuthorNote, AuthorNotesPage, BlockRecord, Budgets,
     ChainInfo, CheckpointStatus, CheckpointSubmit, EmissionAudit, FeeSuggestion, HeaderRecord,
-    Hash32, MempoolInfo,
+    Direction, Hash32, HistoryEntry, HistoryKind, HistoryLookup, MempoolInfo,
     Network, NotesCursor, PeerInfo, StratumSession, SubmitError, SyncStatus, TxLocation, TxLookup,
     TxRecord, Verbosity,
 };
@@ -64,6 +64,20 @@ impl NoteIndex {
         g.retain(|n| n.height <= fork_height);
         for (i, n) in g.iter_mut().enumerate() {
             n.seq = i as u64;
+        }
+    }
+
+    /// A reorg onto `fork_height`: drop the notes of the orphaned blocks, then add
+    /// those of the applied ones. Adding first would have the rollback drop the new
+    /// branch's notes as well, since they sit above the fork too.
+    pub fn on_reorg<'a>(
+        &self,
+        fork_height: u64,
+        applied: impl IntoIterator<Item = (u64, Hash32, &'a [u8])>,
+    ) {
+        self.rollback_above(fork_height);
+        for (height, hash, body) in applied {
+            self.on_block(height, hash, body);
         }
     }
 
@@ -308,6 +322,11 @@ impl plaine_rpc::views::ChainView for RpcChain {
     fn block_by_hash(&self, hash: &Hash32, verbosity: Verbosity) -> Option<BlockRecord> {
         use plaine_chain::traits::Store;
         let r = self.store.header_by_hash(hash)?;
+        // Bodies are kept by height for the best chain only. A side-branch header
+        // has no body here: its height holds another block's.
+        if self.store.hash_at(r.height) != Some(*hash) {
+            return None;
+        }
         self.block_record(r, verbosity)
     }
 
@@ -385,7 +404,7 @@ impl plaine_rpc::views::ChainView for RpcChain {
             plaine_storage::TxLocation::Absent => TxLookup::Absent,
             plaine_storage::TxLocation::Found { height, index } => {
                 let Some(body_bytes) = self.store.body_at_verified(height) else {
-                    return TxLookup::NotIndexed { indexed_from: Some(height) };
+                    return TxLookup::Pruned { height };
                 };
                 let Ok(body) = plaine_consensus::codec::BlockBody::parse(&body_bytes) else {
                     return TxLookup::Absent;
@@ -416,6 +435,180 @@ impl plaine_rpc::views::ChainView for RpcChain {
     fn author_notes(&self, cursor: NotesCursor, limit: usize) -> AuthorNotesPage {
         self.notes.page(cursor, limit, self.tip.get().height)
     }
+
+    // The index hands out positions. Each one is checked against the body that is
+    // canonical at its height now: a row left behind by a block that a reorg
+    // replaced names a transaction that no longer touches the address, and is
+    // skipped - the same approach tx() takes with txindex hits.
+    fn account_history(
+        &self,
+        addr: &Address20,
+        before: Option<(u64, u16)>,
+        limit: usize,
+    ) -> HistoryLookup {
+        let tip = self.tip.get().height;
+        let mut entries: Vec<HistoryEntry> = Vec::with_capacity(limit);
+        let mut cursor = before;
+        let mut unavailable_below: Option<u64> = None;
+        let mut body: Option<(u64, Vec<u8>)> = None;
+        let mut time: Option<(u64, u64)> = None;
+        loop {
+            // A few more than still needed, since stale rows drop out below.
+            let want = limit - entries.len() + 8;
+            let (indexed_from, hits, more) = match self.store.addr_history(addr, cursor, want) {
+                None | Some(plaine_storage::AddrHistory::NotIndexed) => {
+                    return HistoryLookup::NotIndexed
+                }
+                Some(plaine_storage::AddrHistory::Page { indexed_from, hits, more }) => {
+                    (indexed_from, hits, more)
+                }
+            };
+            for (n, hit) in hits.iter().enumerate() {
+                cursor = Some((hit.height, hit.index));
+                if hit.height > tip {
+                    continue;
+                }
+                if body.as_ref().map(|b| b.0) != Some(hit.height) {
+                    match self.store.body_at_verified(hit.height) {
+                        Some(raw) => body = Some((hit.height, raw)),
+                        None => {
+                            body = None;
+                            let above = hit.height + 1;
+                            unavailable_below = Some(unavailable_below.map_or(above, |u| u.max(above)));
+                            continue;
+                        }
+                    }
+                }
+                let Some((_, raw)) = body.as_ref() else { continue };
+                let Ok(parsed) = plaine_consensus::codec::BlockBody::parse(raw) else { continue };
+                let Some(Ok(tx)) = parsed.decode_tx(hit.index as usize) else { continue };
+                let Some((kind, direction, amount_mile, fee_mile, counterparty)) = describe(&tx, addr)
+                else {
+                    continue;
+                };
+                let Some(txid) = txid_of(&tx) else { continue };
+                if time.map(|t| t.0) != Some(hit.height) {
+                    let t = self
+                        .header_by_height(hit.height)
+                        .and_then(|h| plaine_consensus::codec::Header::decode(&h.raw).ok())
+                        .map(|h| h.time)
+                        .unwrap_or(0);
+                    time = Some((hit.height, t));
+                }
+                entries.push(HistoryEntry {
+                    txid,
+                    height: hit.height,
+                    index: hit.index,
+                    time: time.map(|t| t.1).unwrap_or(0),
+                    confirmations: tip - hit.height + 1,
+                    kind,
+                    direction,
+                    amount_mile,
+                    fee_mile,
+                    counterparty,
+                });
+                if entries.len() == limit {
+                    let rest = n + 1 < hits.len() || more;
+                    return HistoryLookup::Page {
+                        indexed_from,
+                        entries,
+                        next_cursor: rest.then_some((hit.height, hit.index)),
+                        unavailable_below,
+                    };
+                }
+            }
+            if !more {
+                return HistoryLookup::Page { indexed_from, entries, next_cursor: None, unavailable_below };
+            }
+        }
+    }
+
+    fn tx_via_history(&self, txid: &Hash32, addr: &Address20) -> Option<TxLookup> {
+        let tip = self.tip.get().height;
+        let mut cursor = None;
+        let mut searched = 0usize;
+        loop {
+            let (indexed_from, hits, more) = match self.store.addr_history(addr, cursor, 256)? {
+                plaine_storage::AddrHistory::NotIndexed => return None,
+                plaine_storage::AddrHistory::Page { indexed_from, hits, more } => {
+                    (indexed_from, hits, more)
+                }
+            };
+            for hit in &hits {
+                cursor = Some((hit.height, hit.index));
+                if hit.height > tip {
+                    continue;
+                }
+                // Each hit costs a body read; past the bound, say how far the search
+                // got rather than keep the RPC worker busy.
+                searched += 1;
+                let Some(raw) = (searched <= TX_SEARCH_MAX_HITS)
+                    .then(|| self.store.body_at_verified(hit.height))
+                    .flatten()
+                else {
+                    return Some(TxLookup::NotIndexed { indexed_from: Some(hit.height + 1) });
+                };
+                let Ok(body) = plaine_consensus::codec::BlockBody::parse(&raw) else { continue };
+                let i = hit.index as usize;
+                let Some(Ok(tx)) = body.decode_tx(i) else { continue };
+                if txid_of(&tx).as_ref() != Some(txid) {
+                    continue;
+                }
+                let Some(tx_raw) = body.tx_bytes(i) else { continue };
+                return Some(TxLookup::Found(TxRecord {
+                    txid: *txid,
+                    type_byte: tx.type_byte(),
+                    raw: tx_raw.to_vec(),
+                    location: TxLocation::Block {
+                        height: hit.height,
+                        confirmations: tip - hit.height + 1,
+                    },
+                    decoded: plaine_rpc::json::Json::Null,
+                }));
+            }
+            if !more {
+                return Some(if indexed_from == 0 {
+                    TxLookup::Absent
+                } else {
+                    TxLookup::NotIndexed { indexed_from: Some(indexed_from) }
+                });
+            }
+        }
+    }
+}
+
+/// How many of an address's index hits `tx_via_history` checks before giving up.
+/// A wallet looks for its own recent transactions, which come first.
+const TX_SEARCH_MAX_HITS: usize = 10_000;
+
+/// How `tx` looks from `addr`'s side, or `None` when it does not touch `addr`.
+fn describe(
+    tx: &plaine_consensus::codec::Tx,
+    addr: &Address20,
+) -> Option<(HistoryKind, Direction, u128, u128, Option<Address20>)> {
+    use plaine_consensus::codec::Tx;
+    use plaine_consensus::crypto::address_payload;
+    match tx {
+        Tx::Coinbase(cb) if cb.to == *addr => {
+            let credit = plaine_consensus::tx::coinbase_credit(cb).unwrap_or(cb.reward);
+            Some((HistoryKind::Coinbase, Direction::In, credit, 0, None))
+        }
+        Tx::Coinbase(_) => None,
+        Tx::Transfer(t) => {
+            let from = address_payload(&t.from_pub);
+            let (direction, peer) = match (from == *addr, t.to == *addr) {
+                (true, true) => (Direction::SelfTransfer, *addr),
+                (true, false) => (Direction::Out, t.to),
+                (false, true) => (Direction::In, from),
+                (false, false) => return None,
+            };
+            Some((HistoryKind::Transfer, direction, t.amount, t.fee, Some(peer)))
+        }
+        Tx::Announcement(a) if address_payload(&a.from_pub) == *addr => {
+            Some((HistoryKind::Announcement, Direction::Out, 0, a.fee, None))
+        }
+        Tx::Announcement(_) => None,
+    }
 }
 
 pub struct RpcMempool {
@@ -423,6 +616,51 @@ pub struct RpcMempool {
     pub tx: tokio::sync::mpsc::Sender<Cmd>,
     pub relay_fee_mile: u128,
     pub max_txs: usize,
+    pub store: Arc<NodeStore>,
+    pub tip: TipCell,
+    /// The last suggestion and the tip it was computed at; recomputed when the tip moves.
+    pub fee_cache: Mutex<Option<(Hash32, FeeSuggestion)>>,
+}
+
+/// Blocks `fee_suggest` samples: SPEC §14's "last 240 blocks", four hours at 60 s.
+pub const FEE_SAMPLE_BLOCKS: u64 = 240;
+
+/// The fees of the transfers in the `count` blocks up to `tip`, and how many blocks
+/// were read. Stops at the first body the store no longer holds (a pruned node).
+fn sample_transfer_fees(store: &NodeStore, tip: u64, count: u64) -> (u64, Vec<u128>) {
+    let mut fees = Vec::new();
+    let mut blocks = 0;
+    for h in (tip.saturating_sub(count.saturating_sub(1))..=tip).rev() {
+        let Some(raw) = store.body_at_verified(h) else { break };
+        blocks += 1;
+        let Ok(body) = plaine_consensus::codec::BlockBody::parse(&raw) else { continue };
+        for i in 0..body.len() {
+            if let Some(Ok(plaine_consensus::codec::Tx::Transfer(t))) = body.decode_tx(i) {
+                fees.push(t.fee);
+            }
+        }
+    }
+    (blocks, fees)
+}
+
+/// Nearest-rank percentiles of the sampled fees, never below the relay floor: a fee
+/// this node would refuse is no suggestion. With no transfers sampled, the floor.
+fn suggest_from(blocks: u64, fees: &mut [u128], floor: u128) -> FeeSuggestion {
+    fees.sort_unstable();
+    let pick = |p: usize| -> u128 {
+        if fees.is_empty() {
+            return floor;
+        }
+        let rank = (p * fees.len()).div_ceil(100).max(1);
+        fees[rank - 1].max(floor)
+    };
+    FeeSuggestion {
+        blocks_sampled: blocks,
+        p10_mile: pick(10),
+        p50_mile: pick(50),
+        p90_mile: pick(90),
+        relay_floor_mile: floor,
+    }
 }
 
 impl plaine_rpc::views::MempoolView for RpcMempool {
@@ -455,13 +693,18 @@ impl plaine_rpc::views::MempoolView for RpcMempool {
     }
 
     fn fee_suggest(&self) -> FeeSuggestion {
-        FeeSuggestion {
-            blocks_sampled: 0,
-            p10_mile: self.relay_fee_mile,
-            p50_mile: self.relay_fee_mile,
-            p90_mile: self.relay_fee_mile,
-            relay_floor_mile: self.relay_fee_mile,
+        let tip = self.tip.get();
+        if let Some((at, s)) = self.fee_cache.lock().ok().and_then(|g| *g) {
+            if at == tip.hash {
+                return s;
+            }
         }
+        let (blocks, mut fees) = sample_transfer_fees(&self.store, tip.height, FEE_SAMPLE_BLOCKS);
+        let s = suggest_from(blocks, &mut fees, self.relay_fee_mile);
+        if let Ok(mut g) = self.fee_cache.lock() {
+            *g = Some((tip.hash, s));
+        }
+        s
     }
 
     fn submit(&self, raw: &[u8]) -> Result<Hash32, SubmitError> {
@@ -733,6 +976,10 @@ mod tests {
             let (_c, reader) = crate::wire::store::tests::open_for_test(cfg);
             Arc::new(NodeStore::new(reader, crate::wire::store::new_ring()))
         }));
+        rpc_chain_on(store, v)
+    }
+
+    fn rpc_chain_on(store: Arc<NodeStore>, v: Option<crate::health::Observation>) -> RpcChain {
         let (tx, rx) = tokio::sync::mpsc::channel::<Cmd>(1);
         drop(rx);
         RpcChain {
@@ -1012,6 +1259,101 @@ mod tests {
     }
 
     #[test]
+    fn fee_percentiles_are_nearest_rank_and_never_below_the_floor() {
+        let s = suggest_from(240, &mut [], 7);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (7, 7, 7), "no transfers: the floor");
+        assert_eq!(s.blocks_sampled, 240);
+
+        let mut fees: Vec<u128> = (1..=100).rev().collect();
+        let s = suggest_from(3, &mut fees, 1);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (10, 50, 90));
+
+        let s = suggest_from(3, &mut [2, 40, 3], 5);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (5, 5, 40), "clamped to the floor");
+        assert_eq!(s.relay_floor_mile, 5);
+
+        let s = suggest_from(1, &mut [9], 1);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (9, 9, 9), "one fee is every percentile");
+    }
+
+    fn body_with_fees(height: u64, fees: &[u128]) -> Vec<u8> {
+        use plaine_consensus::codec::{AuthorNote, BlockBody, CoinbaseTx, TransferTx};
+        let cb = CoinbaseTx {
+            height,
+            to: [0x77; 20],
+            reward: plaine_consensus::emission::block_reward(height),
+            fees: fees.iter().sum(),
+            note: AuthorNote { encoding: 0x01, payload: Vec::new() },
+        };
+        let mut recs = vec![cb.encode().expect("coinbase")];
+        for (n, &fee) in fees.iter().enumerate() {
+            let t = TransferTx {
+                from_pub: [n as u8 + 1; 32],
+                to: [0x22; 20],
+                amount: 1_000,
+                fee,
+                nonce: 0,
+                sig: [0u8; 64],
+            };
+            recs.push(t.encode().to_vec());
+        }
+        let refs: Vec<&[u8]> = recs.iter().map(|r| r.as_slice()).collect();
+        BlockBody::encode(&refs).expect("body")
+    }
+
+    #[test]
+    fn fee_sampling_reads_transfers_back_from_the_tip_and_stops_at_a_gap() {
+        // Heights 10 and 12..=14 are held; 11 is missing, as below a pruning horizon.
+        let blocks = vec![
+            (10, [10u8; 32], body_with_fees(10, &[1_000_000])),
+            (12, [12u8; 32], body_with_fees(12, &[5, 50])),
+            (13, [13u8; 32], body_with_fees(13, &[])),
+            (14, [14u8; 32], body_with_fees(14, &[7])),
+        ];
+        let (dir, _c, store) = crate::wire::store::tests::store_with_ring(blocks);
+
+        let (n, mut fees) = sample_transfer_fees(&store, 14, 240);
+        assert_eq!(n, 3, "14, 13, 12 are read; the gap at 11 ends the sample");
+        fees.sort_unstable();
+        assert_eq!(fees, [5, 7, 50], "only transfers count; block 10 is past the gap");
+
+        let (n, fees) = sample_transfer_fees(&store, 14, 2);
+        assert_eq!((n, fees.len()), (2, 1), "the window is `count` blocks: 14 and 13");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_side_branch_hash_is_not_served_the_best_chain_body() {
+        use plaine_rpc::views::{ChainView, Verbosity};
+        let (best, side) = ([0x05; 32], [0xAB; 32]);
+        let (dir, _committer, store) = crate::wire::store::tests::store_with_fork(5, best, side);
+        let chain = rpc_chain_on(Arc::new(store), None);
+
+        let b = chain.block_by_hash(&best, Verbosity::HeaderAndTxids).expect("the best block");
+        assert_eq!(b.author_note, b"best");
+        assert!(chain.header_by_hash(&side).is_some(), "the side header itself is known");
+        assert!(
+            chain.block_by_hash(&side, Verbosity::HeaderAndTxids).is_none(),
+            "the body stored at height 5 belongs to another block"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_reorg_keeps_the_notes_of_the_branch_it_applies() {
+        let ix = NoteIndex::new();
+        ix.on_block(5, [0u8; 32], &note_body(&[b"kept"]));
+        ix.on_block(6, [1u8; 32], &note_body(&[b"orphaned"]));
+        let replacement = note_body(&[b"replacement"]);
+        let longer = note_body(&[b"on top"]);
+        ix.on_reorg(5, [(6, [2u8; 32], &replacement[..]), (7, [3u8; 32], &longer[..])]);
+        let p = ix.page(NotesCursor::Newest, 10, 7);
+        let payloads: Vec<&[u8]> = p.notes.iter().map(|n| n.payload.as_slice()).collect();
+        assert_eq!(payloads, [&b"on top"[..], b"replacement", b"kept"], "newest first");
+        assert_eq!(p.total, 3);
+    }
+
+    #[test]
     fn txid_hint_verified_against_body() {
         use plaine_consensus::codec::{AuthorNote, BlockBody, CoinbaseTx, Tx};
         let cb = |h: u64| CoinbaseTx {
@@ -1112,4 +1454,79 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod history_describe {
+    use super::*;
+    use plaine_consensus::codec::{AnnouncementTx, AuthorNote, CoinbaseTx, Tx, TransferTx};
+    use plaine_consensus::crypto::address_payload;
+
+    const A: [u8; 32] = [1; 32];
+    const B: [u8; 32] = [2; 32];
+
+    fn cb(to: [u8; 20]) -> Tx {
+        Tx::Coinbase(CoinbaseTx {
+            height: 5,
+            to,
+            reward: 200_000,
+            fees: 3_000,
+            note: AuthorNote { encoding: 0, payload: Vec::new() },
+        })
+    }
+
+    fn xfer(from: [u8; 32], to: [u8; 20]) -> Tx {
+        Tx::Transfer(TransferTx { from_pub: from, to, amount: 7_000, fee: 1_000, nonce: 0, sig: [0; 64] })
+    }
+
+    #[test]
+    fn a_coinbase_credits_reward_plus_fees_to_its_recipient_only() {
+        let a = address_payload(&A);
+        let got = describe(&cb(a), &a).expect("A is the recipient");
+        assert_eq!(got, (HistoryKind::Coinbase, Direction::In, 203_000, 0, None));
+        assert_eq!(describe(&cb(a), &address_payload(&B)), None);
+    }
+
+    #[test]
+    fn a_transfer_reads_from_each_side() {
+        let (a, b) = (address_payload(&A), address_payload(&B));
+        assert_eq!(
+            describe(&xfer(A, b), &a),
+            Some((HistoryKind::Transfer, Direction::Out, 7_000, 1_000, Some(b)))
+        );
+        assert_eq!(
+            describe(&xfer(A, b), &b),
+            Some((HistoryKind::Transfer, Direction::In, 7_000, 1_000, Some(a)))
+        );
+        assert_eq!(
+            describe(&xfer(A, a), &a),
+            Some((HistoryKind::Transfer, Direction::SelfTransfer, 7_000, 1_000, Some(a)))
+        );
+    }
+
+    // This is what drops rows a reorg left behind: the index still points at
+    // (height, index), but the canonical block there now holds a transaction
+    // between other parties.
+    #[test]
+    fn a_transaction_between_others_is_not_part_of_the_history() {
+        let c = address_payload(&[3; 32]);
+        assert_eq!(describe(&xfer(A, address_payload(&B)), &c), None);
+    }
+
+    #[test]
+    fn an_announcement_is_an_outgoing_fee_for_its_author() {
+        let ann = Tx::Announcement(AnnouncementTx {
+            from_pub: A,
+            fee: 5_000,
+            nonce: 1,
+            encoding: 0,
+            payload: b"hello".to_vec(),
+            sig: [0; 64],
+        });
+        assert_eq!(
+            describe(&ann, &address_payload(&A)),
+            Some((HistoryKind::Announcement, Direction::Out, 0, 5_000, None))
+        );
+        assert_eq!(describe(&ann, &address_payload(&B)), None);
+    }
 }

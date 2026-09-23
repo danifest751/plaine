@@ -85,6 +85,30 @@ impl Topology {
         Some(self.cores()?.iter().filter_map(|c| c.first().copied()).collect())
     }
 
+    /// CPUs ordered so that taking the first N spreads them over as many distinct cores
+    /// as possible: every core's first sibling, then every core's second, and so on.
+    ///
+    /// This is the default pin order. Pinning matters here because a worker's 64 KiB pad
+    /// lives in its core's private L2, and a thread the scheduler moves leaves its pad
+    /// behind - measured at 25.0 kH/s pinned against 23.3-23.7 unpinned on a Ryzen 7
+    /// 8745HS, reproducibly. Taking CPUs in plain id order instead would double-book the
+    /// first cores whenever fewer workers than CPUs are asked for.
+    pub fn spread(&self) -> Vec<usize> {
+        let Some(cores) = self.cores() else {
+            return self.cpus.iter().map(|c| c.id).collect();
+        };
+        let deepest = cores.iter().map(|c| c.len()).max().unwrap_or(0);
+        let mut out = Vec::with_capacity(self.cpus.len());
+        for rank in 0..deepest {
+            for core in &cores {
+                if let Some(&id) = core.get(rank) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    }
+
     pub fn classes(&self) -> Vec<u8> {
         let mut v: Vec<u8> = self.cpus.iter().filter_map(|c| c.class).collect();
         v.sort_unstable();
@@ -569,6 +593,46 @@ mod tests {
 
     fn topo(cpus: Vec<Cpu>) -> Topology {
         Topology { model: String::new(), cpus, source: "test", notes: Vec::new() }
+    }
+
+    #[test]
+    fn spread_visits_every_core_before_any_sibling() {
+        // 8 cores, siblings numbered n/n+1 - the layout of the machine the pinning
+        // default was measured on.
+        let t = topo((0..16).map(|i| cpu(i, 0, (i / 2) as i32, None)).collect());
+        assert_eq!(t.spread(), vec![0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15]);
+    }
+
+    #[test]
+    fn spread_reads_a_wide_sibling_stride() {
+        // Dual Broadwell numbering, n/n+28: plain id order would pin the first 28
+        // workers onto 14 cores twice over.
+        let cpus: Vec<Cpu> =
+            (0..56).map(|i| cpu(i, (i % 28 / 14) as i32, (i % 28) as i32, None)).collect();
+        let s = topo(cpus).spread();
+        assert_eq!(&s[..28], &(0..28).collect::<Vec<_>>()[..], "first pass: one CPU per core");
+        assert_eq!(&s[28..], &(28..56).collect::<Vec<_>>()[..], "then the siblings");
+    }
+
+    #[test]
+    fn fewer_workers_than_cpus_land_on_distinct_cores() {
+        let t = topo((0..16).map(|i| cpu(i, 0, (i / 2) as i32, None)).collect());
+        let first8: Vec<usize> = t.spread().into_iter().take(8).collect();
+        assert_eq!(t.cores_covered(&first8), Some(8), "no core may be double-booked");
+    }
+
+    #[test]
+    fn spread_without_core_identity_is_plain_id_order() {
+        let t = topo((0..6).map(|i| cpu(i, -1, -1, None)).collect());
+        assert_eq!(t.spread(), vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn spread_is_a_permutation() {
+        let t = topo((0..12).map(|i| cpu(i, 0, (i % 6) as i32, None)).collect());
+        let mut s = t.spread();
+        s.sort_unstable();
+        assert_eq!(s, (0..12).collect::<Vec<_>>(), "every CPU exactly once");
     }
 
     #[test]

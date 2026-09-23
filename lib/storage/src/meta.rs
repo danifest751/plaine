@@ -14,6 +14,7 @@ pub const K_FINGERPRINT: &str = "state_fingerprint";
 pub const K_INDEX_STATE: &str = "index_state";
 pub const K_STALE_INDEX: &str = "stale_index_count";
 pub const K_TXINDEX_FROM: &str = "txindex_from";
+pub const K_ADDRINDEX_FROM: &str = "addrindex_from";
 pub const K_IBD_BATCH: &str = "ibd_batch_blocks";
 pub const K_BIDX_SEALED: &str = "bidx_sealed_through";
 pub const K_FULLIDX_ROWS: &str = "hash_index_full_rows";
@@ -39,6 +40,7 @@ pub struct Meta {
     pub index_state: u8,
     pub stale_index_count: u64,
     pub txindex_from: Option<u64>,
+    pub addrindex_from: Option<u64>,
     pub ibd_batch_blocks: u32,
     pub bidx_sealed_through: i64,
     pub hash_index_full_rows: u64,
@@ -64,6 +66,7 @@ impl Meta {
             index_state: 0,
             stale_index_count: 0,
             txindex_from: None,
+            addrindex_from: None,
             ibd_batch_blocks,
             bidx_sealed_through: -1,
             hash_index_full_rows: 0,
@@ -172,6 +175,7 @@ pub fn load(db: &redb::Database) -> Result<Option<Meta>, StoreError> {
         index_state,
         stale_index_count: get(K_STALE_INDEX)?.map(|v| u64_of(&v)).unwrap_or(0),
         txindex_from: get(K_TXINDEX_FROM)?.map(|v| u64_of(&v)),
+        addrindex_from: get(K_ADDRINDEX_FROM)?.map(|v| u64_of(&v)),
         ibd_batch_blocks: get(K_IBD_BATCH)?.map(|v| u64_of(&v) as u32).unwrap_or(8_192),
         bidx_sealed_through,
         hash_index_full_rows: get(K_FULLIDX_ROWS)?.map(|v| u64_of(&v)).unwrap_or(0),
@@ -206,6 +210,9 @@ pub fn store(txn: &redb::WriteTransaction, m: &Meta) -> Result<(), StoreError> {
     put(K_STALE_INDEX, &m.stale_index_count.to_le_bytes())?;
     if let Some(f) = m.txindex_from {
         put(K_TXINDEX_FROM, &f.to_le_bytes())?;
+    }
+    if let Some(f) = m.addrindex_from {
+        put(K_ADDRINDEX_FROM, &f.to_le_bytes())?;
     }
     put(K_IBD_BATCH, &(m.ibd_batch_blocks as u64).to_le_bytes())?;
     put(K_BIDX_SEALED, &((m.bidx_sealed_through + 1) as u64).to_le_bytes())?;

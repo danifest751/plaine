@@ -122,6 +122,24 @@ pub fn txid_key(txid: &[u8; 32]) -> [u8; 16] {
     k
 }
 
+pub const ADDR_KEY_BYTES: usize = 30;
+
+pub fn addr_key(addr: &[u8; 20], height: u64, index: u16) -> [u8; ADDR_KEY_BYTES] {
+    let mut k = [0u8; ADDR_KEY_BYTES];
+    k[0..20].copy_from_slice(addr);
+    k[20..28].copy_from_slice(&height.to_be_bytes());
+    k[28..30].copy_from_slice(&index.to_be_bytes());
+    k
+}
+
+pub fn decode_addr_key(k: &[u8; ADDR_KEY_BYTES]) -> ([u8; 20], u64, u16) {
+    let mut a = [0u8; 20];
+    a.copy_from_slice(&k[0..20]);
+    let mut h = [0u8; 8];
+    h.copy_from_slice(&k[20..28]);
+    (a, u64::from_be_bytes(h), u16::from_be_bytes([k[28], k[29]]))
+}
+
 pub fn encode_txloc(height: u64, index: u16) -> [u8; 10] {
     let mut v = [0u8; 10];
     v[0..8].copy_from_slice(&height.to_le_bytes());

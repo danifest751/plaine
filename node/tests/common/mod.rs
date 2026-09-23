@@ -39,7 +39,7 @@ pub fn write_config(dir: &Path, data: &Path, p2p: u16, rpc: u16, stratum: u16, s
         )
     };
     let text = format!(
-        "[node]\nnetwork = \"main\"\ndata_dir = {:?}\n\n[p2p]\nlisten = \"127.0.0.1:{p2p}\"\n{seeds}\n\
+        "[node]\nnetwork = \"main\"\ndata_dir = {:?}\n\n[p2p]\nlisten = \"127.0.0.1:{p2p}\"\nuse_embedded_seeds = false\n{seeds}\n\
          [rpc]\nlisten = \"127.0.0.1:{rpc}\"\n\n[stratum]\nlisten = \"127.0.0.1:{stratum}\"\n",
         data.display().to_string().replace('\\', "/")
     );
@@ -216,7 +216,18 @@ pub fn wait_until_healthy<T: std::fmt::Debug>(
 
 pub const STALL_CEILING: Duration = Duration::from_secs(600);
 
+/// Threads for the test miner: all but two cores, so a run leaves the machine usable.
+pub fn miner_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(2).max(1))
+        .unwrap_or(2)
+}
+
 pub fn mine_to(node: &Node, target: u64, within: Duration) -> u64 {
+    mine_to_address(node, TEST_ADDRESS, target, within)
+}
+
+pub fn mine_to_address(node: &Node, address: &str, target: u64, within: Duration) -> u64 {
     let _serial = MINER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let exe = miner_binary().expect(
         "plaine-miner could not be built. These tests need real proof of work: at POW_LIMIT a \
@@ -225,15 +236,11 @@ pub fn mine_to(node: &Node, target: u64, within: Duration) -> u64 {
     let mut m = Command::new(exe)
         .args([
             "--address",
-            &format!("{TEST_ADDRESS}.it"),
+            &format!("{address}.it"),
             "--stratum",
             &format!("127.0.0.1:{}", node.stratum),
             "--threads",
-
-            &std::thread::available_parallelism()
-                .map(|n| (n.get() - 1).max(1))
-                .unwrap_or(3)
-                .to_string(),
+            &miner_threads().to_string(),
             "--deadline",
             &within.as_secs().to_string(),
         ])
@@ -277,10 +284,7 @@ pub fn mine_background(node: &Node, deadline: Duration) -> RunningMiner {
             "--stratum",
             &format!("127.0.0.1:{}", node.stratum),
             "--threads",
-            &std::thread::available_parallelism()
-                .map(|n| (n.get() - 1).max(1))
-                .unwrap_or(3)
-                .to_string(),
+            &miner_threads().to_string(),
             "--deadline",
             &deadline.as_secs().to_string(),
         ])
