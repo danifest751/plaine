@@ -170,6 +170,15 @@ impl NodeStore {
         None
     }
 
+    pub fn addr_history(
+        &self,
+        addr: &[u8; 20],
+        before: Option<(u64, u16)>,
+        limit: usize,
+    ) -> Option<plaine_storage::AddrHistory> {
+        self.reader.addr_history(addr, before, limit).ok()
+    }
+
     pub fn txindex_lookup(&self, txid: &Hash32) -> plaine_storage::TxLocation {
         match self.reader.txindex_lookup(txid) {
             Ok(l) => l,
