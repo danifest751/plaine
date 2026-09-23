@@ -13,8 +13,9 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 - Miner: workers are pinned one per physical core before any SMT sibling by default;
   `--no-pin` (or `"no-pin": true`) restores OS placement. Measured 25.0 kH/s pinned
   against 23.3–23.7 kH/s unpinned.
-- `scripts/check.sh`: every check a commit must pass, in one command, with the
-  windows-gnu `dlltool` workaround built in.
+- `scripts/check.sh`: every check a commit must pass, in one command. On windows-gnu it
+  takes GNU `dlltool` and `as` from MSYS2 into `target/.tools`.
+- `.gitattributes`: shell scripts stay LF on Windows checkouts.
 - `FORK.md`, `CONTRIBUTING.md`, this changelog, and the roadmap in `docs/ROADMAP.md`.
 
 ### Fixed

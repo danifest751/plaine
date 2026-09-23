@@ -33,21 +33,36 @@ jobs=$(( ncpu > 3 ? ncpu - 2 : 1 ))
 export CARGO_BUILD_JOBS="$jobs"
 export RUST_TEST_THREADS="$jobs"
 
-# windows-gnu: getrandom and windows-sys link through raw-dylib, which needs a
-# dlltool. The one rustup ships in self-contained/ cannot run without an
-# assembler; llvm-dlltool can, and llvm-ar answers to that role when it is
-# invoked under the name dlltool. Build the shim once under target/.
+# windows-gnu: getrandom, windows-sys and friends link through raw-dylib, which
+# needs a GNU dlltool plus the assembler it drives. The dlltool rustup ships in
+# self-contained/ has no assembler next to it and fails. Do NOT substitute
+# llvm-ar under the name dlltool: it links, the node and miner even pass their
+# tests, but the import libraries it writes are wrong for some functions, and a
+# binary that calls one (anything linking eframe/winit) dies at start-up with
+# STATUS_ACCESS_VIOLATION.
+#
+# So take GNU binutils from MSYS2, and only those files: putting all of
+# ucrt64/bin on PATH would also hand rustc MSYS2's gcc as the linker, whose C
+# runtime (UCRT) is not the one the windows-gnu target is built against.
 host="$(rustc -vV | sed -n 's/^host: //p')"
-if [[ "$host" == *windows-gnu* ]] && ! command -v dlltool >/dev/null 2>&1; then
-    sysroot="$(rustc --print sysroot)"
-    llvm_ar="$sysroot/lib/rustlib/$host/bin/llvm-ar.exe"
-    if [[ ! -f "$llvm_ar" ]]; then
-        echo "windows-gnu needs llvm-dlltool: run  rustup component add llvm-tools" >&2
-        exit 1
-    fi
+if [[ "$host" == *windows-gnu* ]] && ! dlltool --version 2>/dev/null | grep -q 'GNU Binutils'; then
     shim="$ws/target/.tools"
-    mkdir -p "$shim"
-    [[ -f "$shim/dlltool.exe" ]] || cp "$llvm_ar" "$shim/dlltool.exe"
+    if [[ ! -x "$shim/dlltool.exe" ]] || ! "$shim/dlltool.exe" --version 2>/dev/null | grep -q 'GNU Binutils'; then
+        src=""
+        for d in /c/msys64/ucrt64/bin /c/msys64/mingw64/bin /ucrt64/bin /mingw64/bin; do
+            if [[ -x "$d/dlltool.exe" && -x "$d/as.exe" ]]; then src="$d"; break; fi
+        done
+        if [[ -z "$src" ]]; then
+            echo "windows-gnu needs GNU dlltool. Install MSYS2 and, in its UCRT64 shell:" >&2
+            echo "    pacman -S mingw-w64-ucrt-x86_64-binutils" >&2
+            exit 1
+        fi
+        rm -rf "$shim"
+        mkdir -p "$shim"
+        for f in dlltool.exe as.exe libintl-8.dll libiconv-2.dll libzstd.dll zlib1.dll; do
+            cp "$src/$f" "$shim/"
+        done
+    fi
     export PATH="$shim:$PATH"
 fi
 

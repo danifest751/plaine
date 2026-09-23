@@ -65,19 +65,18 @@ cargo build --release                                     # node and wallet
 cargo build --release --manifest-path miner/Cargo.toml    # miner
 ```
 
-**Windows with the `x86_64-pc-windows-gnu` toolchain.** `getrandom` and `windows-sys`
-link through `raw-dylib` and need a `dlltool`. The one rustup ships cannot run without an
-assembler. `scripts/check.sh` handles this by itself; for a manual build:
+**Windows with the `x86_64-pc-windows-gnu` toolchain.** `getrandom`, `windows-sys` and
+friends link through `raw-dylib`, which needs GNU `dlltool` and the assembler it drives.
+The `dlltool` rustup ships has no assembler beside it and fails. Get GNU binutils from
+[MSYS2](https://www.msys2.org/) (in its UCRT64 shell: `pacman -S
+mingw-w64-ucrt-x86_64-binutils`); `scripts/check.sh` finds them and copies just
+`dlltool`, `as` and their four DLLs into `target/.tools`, so MSYS2's `gcc` never becomes
+the linker. For a manual build, put that directory first on `PATH`.
 
-```
-rustup component add llvm-tools
-mkdir -p target/.tools
-cp "$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/llvm-ar.exe" target/.tools/dlltool.exe
-PATH="$PWD/target/.tools:$PATH" cargo build --release
-```
-
-`llvm-ar` behaves as `llvm-dlltool` when it is invoked under that name. The MSVC toolchain
-does not need any of this.
+Do not substitute `llvm-ar` renamed to `dlltool`. It links, and the node and miner even
+pass their tests, but the import libraries it writes are wrong for some functions: a
+binary that calls one — anything linking `eframe`/`winit`, for instance — dies at start-up
+with `STATUS_ACCESS_VIOLATION`. The MSVC toolchain needs none of this.
 
 ## Checking
 
