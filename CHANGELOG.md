@@ -7,6 +7,13 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Node: opt-in address index, `[node] addrindex = true`, and the RPC method
+  `account_getHistory(address, limit?, cursor?)`: an address's confirmed transactions,
+  newest first, each with kind, direction, amount, fee and counterparty, paged by cursor.
+  Rows survive reorgs and are checked against the canonical body on read, as `txindex`
+  hits are. Documented in `docs/rpc.md`.
+- Storage: a block body that cannot be parsed is refused before anything is written;
+  failing half-way through a block used to leave the committer unable to shut down.
 - Miner: `--batch N` (and `"batch"` in the config file) sets how many nonces one W^X seal
   covers. By default it is sized so the batch's pads fit half the thread's L2 share;
   measured 27.12 kH/s at 4 against 24.88 kH/s at the old fixed 32 on a Ryzen 7 8745HS.
