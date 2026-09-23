@@ -6,5 +6,6 @@
 
 pub mod app;
 pub mod kdf;
+pub mod mining;
 pub mod model;
 pub mod rpc;

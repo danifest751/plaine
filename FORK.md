@@ -47,7 +47,12 @@ in [CHANGELOG.md](CHANGELOG.md).
 **Miner**
 
 - The W^X batch is sized to the machine's L2 (`--batch N` to override), and workers are
-  pinned one per core before any SMT sibling (`--no-pin` to opt out).
+  pinned one per core before any SMT sibling (`--no-pin` to opt out), fastest core class
+  first.
+- Android: the processor topology is read as on Linux, and big.LITTLE cores are told
+  apart by `cpu_capacity`, so a phone's big cores are used first.
+- `--status-format json`: one JSON object per line on stdout (status, share, block,
+  summary) for a program to read; the desktop wallet's Mining tab uses it.
 
 **Tests and tooling**
 
@@ -171,6 +176,11 @@ README's quick start writes the key to, nor the passphrase files the README docu
   of `node_getBudgets` return 0 or empty instead of an error.
 - **Placeholders in answers.** A transaction's `decoded` is always `null`, and
   `chain_getBlockByHeight` at verbosity 2 returns an empty `txs`.
+- **A miner reconnecting to a fresh local node.** Once, in a full check run, the miner
+  started by the desktop wallet was seen reconnecting to a fresh test node a few seconds
+  after its first accepted shares; the node's log at `info` level gives no reason, and
+  five further runs did not repeat it. The end-to-end test now waits for the session to
+  log in again rather than reading it once.
 - **The committer after a failed apply.** While building the address index, an error
   returned half-way through applying a block left the storage committer unable to shut
   down (a test hung on drop). The fork checks a block's body before writing anything, so

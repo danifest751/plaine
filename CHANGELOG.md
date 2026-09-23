@@ -7,6 +7,15 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Desktop wallet: a Mining tab. It runs `plaine-miner` paying to the wallet's address, in
+  a Background (half the cores, idle priority) or Maximum profile, and shows the hash
+  rate, shares, blocks and height from the miner's JSON status. It keeps mining while the
+  wallet is locked and stops when the wallet closes.
+- Miner: `--status-format json` (and `"status-format"` in the config file) writes one JSON
+  object per line on stdout: `status` every `--status` seconds, `share`, `block` and a
+  final `summary`. Errors stay on stderr as text.
+- Miner: the processor topology is read on Android as on Linux; phones' big.LITTLE cores
+  are classed by `cpu_capacity` and pinning takes the fastest class first.
 - Desktop wallet: an end-to-end test through the GUI against a real node and miner (two
   keys, a matured coinbase, a transfer on the send screen, both histories, balances
   against `emission_audit`), a Refresh button, and a test for a node that is down.

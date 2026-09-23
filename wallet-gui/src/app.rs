@@ -2,6 +2,7 @@
 //! goes through `plaine_wallet::api`. The only secret held here is the open key,
 //! and locking drops it.
 
+use crate::mining::{self, Miner, Profile};
 use crate::model::{
     self, plan_send, rows, sent_log_for, Cmd, FeeLevel, FormErrors, HistoryState, NodeView,
     SendForm, SendPlan, SentRecord, Settings, Worker,
@@ -38,6 +39,7 @@ pub enum Tab {
     Home,
     Send,
     History,
+    Mining,
     Settings,
 }
 
@@ -103,6 +105,10 @@ pub struct WalletApp {
     last_activity: Instant,
     clear_clipboard_at: Option<Instant>,
     settings_note: Option<String>,
+    /// The miner started from the Mining tab; it keeps running while locked.
+    miner: Option<Miner>,
+    profile: Profile,
+    miner_error: Option<String>,
 }
 
 impl WalletApp {
@@ -149,6 +155,9 @@ impl WalletApp {
             last_activity: Instant::now(),
             clear_clipboard_at: None,
             settings_note: None,
+            miner: None,
+            profile: Profile::Background,
+            miner_error: None,
         }
     }
 
@@ -416,6 +425,7 @@ impl WalletApp {
         let mut lock = false;
         let mut save = false;
         let mut copy_secret: Option<String> = None;
+        let mut mining_for: Option<String> = None;
         {
             let Screen::Open(s) = &mut self.screen else {
                 return;
@@ -427,6 +437,7 @@ impl WalletApp {
                 ui.selectable_value(&mut s.tab, Tab::Home, "Home");
                 ui.selectable_value(&mut s.tab, Tab::Send, "Send");
                 ui.selectable_value(&mut s.tab, Tab::History, "History");
+                ui.selectable_value(&mut s.tab, Tab::Mining, "Mining");
                 ui.selectable_value(&mut s.tab, Tab::Settings, "Settings");
                 if ui.button("Refresh").clicked() {
                     s.worker.send(Cmd::Refresh);
@@ -455,12 +466,17 @@ impl WalletApp {
                 Tab::Home => home_tab(ui, s, &view),
                 Tab::Send => send_tab(ui, s, &view),
                 Tab::History => history_tab(ui, s, &view),
+                // Drawn below, outside the session: the miner outlives a lock.
+                Tab::Mining => mining_for = Some(s.summary.address.clone()),
                 Tab::Settings => {
                     let (sv, cp) = settings_tab(ui, s, &mut self.settings, &self.settings_note);
                     save = sv;
                     copy_secret = cp;
                 }
             }
+        }
+        if let Some(address) = mining_for {
+            self.mining_tab(ui, &address);
         }
         if let Some(text) = copy_secret {
             ui.ctx().copy_text(text);
@@ -480,6 +496,98 @@ impl WalletApp {
         }
         if lock {
             self.lock();
+        }
+    }
+
+    fn mining_tab(&mut self, ui: &mut egui::Ui, address: &str) {
+        ui.label("Mines with this computer's processor, paying to this wallet's address.");
+        let state = self.miner.as_mut().map(Miner::state);
+        let running = state.as_ref().is_some_and(|s| s.running);
+
+        if !running {
+            ui.horizontal(|ui| {
+                ui.label("Profile");
+                ui.radio_value(
+                    &mut self.profile,
+                    Profile::Background,
+                    "Background (half the cores, idle priority)",
+                );
+                ui.radio_value(&mut self.profile, Profile::Maximum, "Maximum (every core)");
+            });
+            let default_stratum = mining::stratum_for(&self.settings.node);
+            let default_miner = mining::default_miner_path().display().to_string();
+            if self.settings.stratum.is_empty() {
+                self.settings.stratum = default_stratum;
+            }
+            if self.settings.miner.is_empty() {
+                self.settings.miner = default_miner;
+            }
+            field(ui, "Stratum server", &mut self.settings.stratum, false);
+            field(ui, "Miner program", &mut self.settings.miner, false);
+            field(ui, "Rig name", &mut self.settings.rig, false);
+            if ui.button("Start mining").clicked() {
+                let exe = PathBuf::from(self.settings.miner.trim());
+                match Miner::start(
+                    &exe,
+                    address,
+                    &self.settings.rig,
+                    &self.settings.stratum,
+                    self.profile,
+                ) {
+                    Ok(m) => {
+                        self.miner = Some(m);
+                        self.miner_error = None;
+                        self.save_settings();
+                    }
+                    Err(e) => {
+                        self.miner_error = Some(format!("cannot start {}: {e}", exe.display()))
+                    }
+                }
+            }
+        } else if ui.button("Stop mining").clicked() {
+            if let Some(m) = self.miner.as_mut() {
+                m.stop();
+            }
+        }
+        if let Some(e) = &self.miner_error {
+            ui.colored_label(BAD, e);
+        }
+
+        if let Some(st) = self.miner.as_mut().map(Miner::state) {
+            ui.add_space(8.0);
+            egui::Grid::new("mining").num_columns(2).show(ui, |ui| {
+                ui.label("State");
+                ui.label(match (&st.exit, st.running) {
+                    (_, true) => "mining".to_string(),
+                    (Some(e), false) => e.clone(),
+                    (None, false) => "stopped".to_string(),
+                });
+                ui.end_row();
+                ui.label("Hash rate");
+                ui.label(format!("{} H/s (average {})", st.hashrate, st.avg));
+                ui.end_row();
+                ui.label("Shares");
+                ui.label(format!(
+                    "{} accepted, {} rejected",
+                    st.accepted, st.rejected
+                ));
+                ui.end_row();
+                ui.label("Blocks found");
+                ui.label(st.blocks.to_string());
+                ui.end_row();
+                ui.label("Height");
+                ui.label(st.height.to_string());
+                ui.end_row();
+                ui.label("Threads");
+                ui.label(st.threads.to_string());
+                ui.end_row();
+            });
+            if let Some(e) = &st.last_error {
+                ui.small(format!("miner: {e}"));
+            }
+            if st.running {
+                ui.ctx().request_repaint_after(Duration::from_secs(1));
+            }
         }
     }
 }

@@ -30,6 +30,12 @@ in Settings together with an RPC token.
   node's `fee_suggest`, never below the relay floor; the nonce comes from the node's
   `pendingNonce`. A confirmation screen shows the total before anything is signed.
 - **History:** pending transfers first, then confirmed ones, newest first, paged.
+- **Mining:** starts `plaine-miner` (by default the one beside the wallet) paying to this
+  wallet's address, through the node's stratum server (same host, port 9258) or any
+  other. *Background* mines on half the cores at idle priority, *Maximum* on all of them.
+  The tab shows hash rate, accepted and rejected shares, blocks found and height, read
+  from the miner's `--status-format json` lines. Mining needs no key, so it goes on while
+  the wallet is locked; closing the wallet stops it.
 - **Settings:** node address and token, the auto-lock delay, writing a copy of the key
   under a new passphrase (argon2id), and showing the backup string after the passphrase
   is entered again. A copied backup string is wiped from the clipboard after 60 seconds.

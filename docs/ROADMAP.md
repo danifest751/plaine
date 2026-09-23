@@ -375,5 +375,12 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   wrong passphrase, weak passphrase, a node that is down, a transfer the node refuses
   (a reused nonce among them). Measurement 0.5: mining 62 blocks on a fresh chain with
   all but two cores takes 2.5-3.5 minutes on a Ryzen 7 8745HS.
-- [ ] Phase 5
+- [x] **Phase 5** — done. 5.3: the topology reader builds for Android, splits
+  big.LITTLE cores by `cpu_capacity`, and pinning takes the big cores first; checked with
+  a Snapdragon 732G layout and `cargo check --target aarch64-linux-android`. 5.4 done:
+  `--status-format json`, one object per line (status, share, block, summary), checked
+  against a live node. 5.1 and 5.2 need nothing more (PRs stay as they are; measurements
+  are in `FORK.md`). 5.5 done: the Mining tab starts and stops `plaine-miner` with a
+  Background or Maximum profile and shows its JSON status. 5.6 done: end to end, the tab
+  mines to the wallet on a real node and shows accepted shares (`wallet-gui/tests/e2e.rs`).
 - [ ] Phase 6
