@@ -36,6 +36,14 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Fixed
 
+- Node: after a reorg, `author_getNotes` lost the announcements of the branch it had just
+  applied: their notes were added and then removed by the rollback meant for the orphaned
+  blocks. The rollback now runs first.
+- Node: `chain_getBlockByHash` with the hash of a side-branch block returned the best
+  chain's body at that height under the side header. It now answers not found; the header
+  is still served by `chain_getHeaderByHash`.
+- Node: with `txindex` on, `tx_get` for a transaction in a pruned block said the index began
+  at that height. It now says the block's body was pruned.
 - Miner: `mining.submit` sent a reformatted job id (`"2341"` came back as `"00002341"`),
   so pools that do not pad ids refused every share. It now echoes the server's spelling.
 - Miner: a `result` that is a JSON object (`{"status":"OK"}`) made the whole line fail to

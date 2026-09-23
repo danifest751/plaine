@@ -324,6 +324,9 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   1.4 done: `docs/rpc.md` covers all 19 methods, checked field by field against a running
   node; `reference_doc.rs` keeps it in step with the method list. Writing it turned up the
   defects listed under 1.6. 1.3 waits on an upstream issue.
+  1.6, first part done: announcements survive a reorg, a side-branch hash no longer gets
+  another block's body, and a pruned `tx_get` names pruning. Still open: announcements
+  after a restart, a note's `time`, `chainwork` below the tip.
 - [ ] Phase 2
 - [ ] Phase 3
 - [ ] Phase 4
