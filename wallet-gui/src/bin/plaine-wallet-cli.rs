@@ -22,6 +22,16 @@ fn main() {
         plaine_wallet::wallet_cli::run(&argv, &mut s)
     };
 
+    if code == 0
+        && matches!(
+            argv.first().map(String::as_str),
+            Some("version" | "--version")
+        )
+    {
+        use std::io::Write;
+        let _ = writeln!(out, "{}", env!("PLAINE_BUILD_LINE"));
+    }
+
     use std::io::Write;
     let _ = out.flush();
     let _ = err.flush();
