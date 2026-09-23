@@ -20,6 +20,7 @@ path = "src/bin/plaine-wallet-cli.rs"
 plaine-wallet = { path = "../wallet" }
 plaine-consensus = { path = "../lib/consensus" }
 serde_json = "1"
+qrcode = { version = "0.14", default-features = false }
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "accesskit"] }
 # The memory-hard KDF for key files (kdf: argon2id-v1). It lives here, not in
 # plaine-wallet, whose dependency policy admits no KDF library; see src/kdf.rs.

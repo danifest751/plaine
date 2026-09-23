@@ -8,6 +8,7 @@ use crate::model::{
     SendForm, SendPlan, SentRecord, Settings, Worker,
 };
 use crate::rpc::Transport;
+use crate::style;
 use eframe::egui::{self, Color32, RichText};
 use plaine_consensus::constants::Network;
 use plaine_wallet::api::{self, Kdf, KeySummary, OpenKey};
@@ -109,6 +110,7 @@ pub struct WalletApp {
     miner: Option<Miner>,
     profile: Profile,
     miner_error: Option<String>,
+    styled: bool,
 }
 
 impl WalletApp {
@@ -158,6 +160,7 @@ impl WalletApp {
             miner: None,
             profile: Profile::Background,
             miner_error: None,
+            styled: false,
         }
     }
 
@@ -249,6 +252,10 @@ impl WalletApp {
     /// Draws the wallet. The desktop app and the tests both call this.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        if !self.styled {
+            style::apply(&ctx);
+            self.styled = true;
+        }
         if ui.input(|i| !i.events.is_empty() || i.pointer.is_moving()) {
             self.last_activity = Instant::now();
         }
@@ -270,8 +277,14 @@ impl WalletApp {
         }
 
         match &mut self.screen {
-            Screen::Start { .. } => self.start_screen(ui, &ctx),
-            Screen::Unlock(_) => self.unlock_screen(ui, &ctx),
+            Screen::Start { .. } => {
+                ui.add_space(32.0);
+                style::column(ui, |ui| style::card(ui, |ui| self.start_screen(ui, &ctx)));
+            }
+            Screen::Unlock(_) => {
+                ui.add_space(32.0);
+                style::column(ui, |ui| style::card(ui, |ui| self.unlock_screen(ui, &ctx)));
+            }
             Screen::Open(_) => self.wallet_screen(ui),
         }
     }
@@ -280,8 +293,17 @@ impl WalletApp {
         let Screen::Start { mode, form } = &mut self.screen else {
             return;
         };
-        ui.heading("Plaine wallet");
-        ui.add_space(6.0);
+        ui.label(
+            RichText::new("Plaine wallet")
+                .heading()
+                .strong()
+                .color(style::ACCENT),
+        );
+        style::caption(
+            ui,
+            "Your keys stay on this computer. The node only sees what you send.",
+        );
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.selectable_value(mode, StartMode::Open, "Open a key file");
             ui.selectable_value(mode, StartMode::Create, "Create a new key");
@@ -312,13 +334,16 @@ impl WalletApp {
                 field(ui, "Repeat passphrase", &mut form.pass2, true);
             }
         }
-        let go = ui
-            .button(match mode {
+        ui.add_space(6.0);
+        let go = style::primary(
+            ui,
+            match mode {
                 StartMode::Open => "Open",
                 StartMode::Create => "Create",
                 StartMode::Import => "Restore",
-            })
-            .clicked();
+            },
+        )
+        .clicked();
         if let Some(e) = &form.error {
             ui.colored_label(BAD, e);
         }
@@ -385,15 +410,19 @@ impl WalletApp {
             return;
         };
         ui.heading("Unlock");
-        ui.label(format!(
-            "{}  ({})",
-            form.summary.address,
-            form.path.display()
-        ));
+        ui.monospace(&form.summary.address);
+        style::caption(ui, &form.path.display().to_string());
+        ui.add_space(4.0);
         let r = field(ui, "Passphrase", &mut form.pass, true);
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let unlock = ui.button("Unlock").clicked() || enter;
-        let other = ui.button("Use another key file").clicked();
+        let (unlock, other) = ui
+            .horizontal(|ui| {
+                let u = style::primary(ui, "Unlock").clicked();
+                let o = ui.button("Use another key file").clicked();
+                (u, o)
+            })
+            .inner;
+        let unlock = unlock || enter;
         if let Some(e) = &form.error {
             ui.colored_label(BAD, e);
         }
@@ -425,59 +454,96 @@ impl WalletApp {
         let mut lock = false;
         let mut save = false;
         let mut copy_secret: Option<String> = None;
-        let mut mining_for: Option<String> = None;
-        {
+        let (tab, address, view) = {
             let Screen::Open(s) = &mut self.screen else {
                 return;
             };
             let view = s.worker.view();
-
-            ui.horizontal(|ui| {
-                ui.heading("Plaine wallet");
-                ui.selectable_value(&mut s.tab, Tab::Home, "Home");
-                ui.selectable_value(&mut s.tab, Tab::Send, "Send");
-                ui.selectable_value(&mut s.tab, Tab::History, "History");
-                ui.selectable_value(&mut s.tab, Tab::Mining, "Mining");
-                ui.selectable_value(&mut s.tab, Tab::Settings, "Settings");
-                if ui.button("Refresh").clicked() {
-                    s.worker.send(Cmd::Refresh);
-                }
-                if ui.button("Lock").clicked() {
-                    lock = true;
-                }
+            egui::Panel::top("nav").show(ui, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Plaine")
+                            .heading()
+                            .strong()
+                            .color(style::ACCENT),
+                    );
+                    ui.add_space(12.0);
+                    for (t, name) in [
+                        (Tab::Home, "Home"),
+                        (Tab::Send, "Send"),
+                        (Tab::History, "History"),
+                        (Tab::Mining, "Mining"),
+                        (Tab::Settings, "Settings"),
+                    ] {
+                        ui.selectable_value(&mut s.tab, t, name);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Lock").clicked() {
+                            lock = true;
+                        }
+                        if ui.button("Refresh").clicked() {
+                            s.worker.send(Cmd::Refresh);
+                        }
+                    });
+                });
+                ui.add_space(6.0);
             });
-            node_line(ui, &view);
-            ui.separator();
+            egui::Panel::bottom("status").show(ui, |ui| {
+                ui.add_space(4.0);
+                node_line(ui, &view);
+                ui.add_space(2.0);
+            });
+            (s.tab, s.summary.address.clone(), view)
+        };
 
-            if let Some(b) = &s.fresh_backup {
-                ui.colored_label(
-                    WARN,
-                    "Write down this backup string now. It is the key itself.",
-                );
-                ui.monospace(b);
-                ui.label("It is shown this once. Anyone who has it can spend from this wallet.");
-                if ui.button("I have written it down").clicked() {
-                    s.fresh_backup = None;
-                }
-                return;
-            }
+        egui::CentralPanel::default().show(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.add_space(12.0);
+                style::column(ui, |ui| {
+                    let Screen::Open(s) = &mut self.screen else {
+                        return;
+                    };
+                    if let Some(b) = s.fresh_backup.clone() {
+                        style::card(ui, |ui| {
+                            ui.label(
+                                RichText::new(
+                                    "Write down this backup string now. It is the key itself.",
+                                )
+                                .color(style::WARN)
+                                .strong(),
+                            );
+                            ui.add_space(6.0);
+                            ui.monospace(&b);
+                            ui.add_space(6.0);
+                            ui.label(
+                                "It is shown this once. Anyone who has it can spend from this \
+                                 wallet.",
+                            );
+                            ui.add_space(6.0);
+                            if style::primary(ui, "I have written it down").clicked() {
+                                s.fresh_backup = None;
+                            }
+                        });
+                        return;
+                    }
+                    match tab {
+                        Tab::Home => home_tab(ui, s, &view),
+                        Tab::Send => send_tab(ui, s, &view),
+                        Tab::History => history_tab(ui, s, &view),
+                        Tab::Mining => style::card(ui, |ui| self.mining_tab(ui, &address)),
+                        Tab::Settings => {
+                            let (sv, cp) =
+                                settings_tab(ui, s, &mut self.settings, &self.settings_note);
+                            save = sv;
+                            copy_secret = cp;
+                        }
+                    }
+                });
+                ui.add_space(12.0);
+            });
+        });
 
-            match s.tab {
-                Tab::Home => home_tab(ui, s, &view),
-                Tab::Send => send_tab(ui, s, &view),
-                Tab::History => history_tab(ui, s, &view),
-                // Drawn below, outside the session: the miner outlives a lock.
-                Tab::Mining => mining_for = Some(s.summary.address.clone()),
-                Tab::Settings => {
-                    let (sv, cp) = settings_tab(ui, s, &mut self.settings, &self.settings_note);
-                    save = sv;
-                    copy_secret = cp;
-                }
-            }
-        }
-        if let Some(address) = mining_for {
-            self.mining_tab(ui, &address);
-        }
         if let Some(text) = copy_secret {
             ui.ctx().copy_text(text);
             self.clear_clipboard_at = Some(Instant::now() + CLIPBOARD_SECRET_FOR);
@@ -500,7 +566,11 @@ impl WalletApp {
     }
 
     fn mining_tab(&mut self, ui: &mut egui::Ui, address: &str) {
-        ui.label("Mines with this computer's processor, paying to this wallet's address.");
+        ui.heading("Mining");
+        style::caption(
+            ui,
+            "Mines with this computer's processor, paying to this wallet's address.",
+        );
         let state = self.miner.as_mut().map(Miner::state);
         let running = state.as_ref().is_some_and(|s| s.running);
 
@@ -525,7 +595,7 @@ impl WalletApp {
             field(ui, "Stratum server", &mut self.settings.stratum, false);
             field(ui, "Miner program", &mut self.settings.miner, false);
             field(ui, "Rig name", &mut self.settings.rig, false);
-            if ui.button("Start mining").clicked() {
+            if style::primary(ui, "Start mining").clicked() {
                 let exe = PathBuf::from(self.settings.miner.trim());
                 match Miner::start(
                     &exe,
@@ -593,143 +663,191 @@ impl WalletApp {
 }
 
 fn home_tab(ui: &mut egui::Ui, s: &mut Session, view: &NodeView) {
-    ui.label("Your address");
-    ui.horizontal(|ui| {
-        ui.monospace(&s.summary.address);
-        if ui.button("Copy address").clicked() {
-            ui.ctx().copy_text(s.summary.address.clone());
-        }
-    });
-    ui.add_space(8.0);
-    match &view.account {
+    style::card(ui, |ui| match &view.account {
         Some(Ok(a)) => {
-            egui::Grid::new("balance").num_columns(2).show(ui, |ui| {
-                ui.label("Spendable");
-                ui.label(RichText::new(format!("{} PLNE", api::format_plne(a.spendable))).strong());
-                ui.end_row();
-                ui.label("Maturing");
-                ui.label(format!("{} PLNE", api::format_plne(a.immature)));
-                ui.end_row();
-                ui.label("Total");
-                ui.label(format!("{} PLNE", api::format_plne(a.balance)));
-                ui.end_row();
-                ui.label("Pending sends");
-                ui.label(format!("{}", view.pending.len()));
-                ui.end_row();
-            });
+            style::caption(ui, "Spendable");
+            ui.label(
+                RichText::new(format!("{} PLNE", api::format_plne(a.spendable)))
+                    .size(34.0)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            egui::Grid::new("balance")
+                .num_columns(2)
+                .spacing([24.0, 6.0])
+                .show(ui, |ui| {
+                    style::caption(ui, "Maturing");
+                    ui.label(format!("{} PLNE", api::format_plne(a.immature)));
+                    ui.end_row();
+                    style::caption(ui, "Total");
+                    ui.label(format!("{} PLNE", api::format_plne(a.balance)));
+                    ui.end_row();
+                    style::caption(ui, "Pending sends");
+                    ui.label(format!("{}", view.pending.len()));
+                    ui.end_row();
+                });
         }
         Some(Err(e)) => {
             ui.colored_label(BAD, e);
         }
         None => {
+            style::caption(ui, "Spendable");
             ui.label("Balance: waiting for the node");
         }
-    }
+    });
+    ui.add_space(10.0);
+    style::card(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width((ui.available_width() - 170.0).max(200.0));
+                ui.label(RichText::new("Your address").strong());
+                style::caption(ui, "Share it to be paid. It is safe to show anyone.");
+                ui.add_space(6.0);
+                ui.add(egui::Label::new(RichText::new(&s.summary.address).monospace()).wrap());
+                ui.add_space(6.0);
+                if ui.button("Copy address").clicked() {
+                    ui.ctx().copy_text(s.summary.address.clone());
+                }
+            });
+            style::qr(ui, &s.summary.address.to_uppercase(), 150.0);
+        });
+    });
     if !s.summary.encrypted {
-        ui.add_space(8.0);
-        ui.colored_label(
-            WARN,
-            "This key file is not encrypted: anyone who reads it can spend. Settings can write \
-             a protected copy.",
-        );
+        ui.add_space(10.0);
+        style::card(ui, |ui| {
+            ui.colored_label(
+                WARN,
+                "This key file is not encrypted: anyone who reads it can spend. Settings can \
+                 write a protected copy.",
+            );
+        });
     }
 }
 
 fn send_tab(ui: &mut egui::Ui, s: &mut Session, view: &NodeView) {
     if let Some(plan) = s.confirm.clone() {
-        ui.heading("Confirm");
-        egui::Grid::new("confirm").num_columns(2).show(ui, |ui| {
-            ui.label("To");
-            ui.monospace(&plan.to);
-            ui.end_row();
-            ui.label("Amount");
-            ui.label(format!("{} PLNE", api::format_plne(plan.amount)));
-            ui.end_row();
-            ui.label("Fee");
-            ui.label(format!("{} PLNE", api::format_plne(plan.fee)));
-            ui.end_row();
-            ui.label("Total");
-            ui.label(RichText::new(format!("{} PLNE", api::format_plne(plan.total()))).strong());
-            ui.end_row();
-            ui.label("Nonce");
-            ui.label(plan.nonce.to_string());
-            ui.end_row();
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Sign and send").clicked() {
-                match s.key.sign_transfer(
-                    Network::Main,
-                    &plan.to,
-                    plan.amount,
-                    plan.fee,
-                    plan.nonce,
-                ) {
-                    Ok(tx) => {
-                        let record = SentRecord {
-                            txid: plaine_consensus::hex::encode(&tx.txid),
-                            nonce: tx.nonce,
-                            amount: tx.amount,
-                            fee: tx.fee,
-                            to: tx.to.clone(),
-                            time: now_secs(),
-                        };
-                        s.worker.send(Cmd::Submit {
-                            hex: tx.hex,
-                            record,
-                        });
-                        s.send = SendForm::default();
+        style::card(ui, |ui| {
+            ui.heading("Confirm");
+            style::caption(
+                ui,
+                "Check every line. A sent transfer cannot be called back.",
+            );
+            ui.add_space(6.0);
+            egui::Grid::new("confirm")
+                .num_columns(2)
+                .spacing([24.0, 8.0])
+                .show(ui, |ui| {
+                    style::caption(ui, "To");
+                    ui.monospace(&plan.to);
+                    ui.end_row();
+                    style::caption(ui, "Amount");
+                    ui.label(format!("{} PLNE", api::format_plne(plan.amount)));
+                    ui.end_row();
+                    style::caption(ui, "Fee");
+                    ui.label(format!("{} PLNE", api::format_plne(plan.fee)));
+                    ui.end_row();
+                    style::caption(ui, "Total");
+                    ui.label(
+                        RichText::new(format!("{} PLNE", api::format_plne(plan.total())))
+                            .strong()
+                            .size(18.0),
+                    );
+                    ui.end_row();
+                    style::caption(ui, "Nonce");
+                    ui.label(plan.nonce.to_string());
+                    ui.end_row();
+                });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if style::primary(ui, "Sign and send").clicked() {
+                    match s.key.sign_transfer(
+                        Network::Main,
+                        &plan.to,
+                        plan.amount,
+                        plan.fee,
+                        plan.nonce,
+                    ) {
+                        Ok(tx) => {
+                            let record = SentRecord {
+                                txid: plaine_consensus::hex::encode(&tx.txid),
+                                nonce: tx.nonce,
+                                amount: tx.amount,
+                                fee: tx.fee,
+                                to: tx.to.clone(),
+                                time: now_secs(),
+                            };
+                            s.worker.send(Cmd::Submit {
+                                hex: tx.hex,
+                                record,
+                            });
+                            s.send = SendForm::default();
+                        }
+                        Err(e) => s.send_errors.other = Some(e.to_string()),
                     }
-                    Err(e) => s.send_errors.other = Some(e.to_string()),
+                    s.confirm = None;
                 }
-                s.confirm = None;
-            }
-            if ui.button("Back").clicked() {
-                s.confirm = None;
-            }
+                if ui.button("Back").clicked() {
+                    s.confirm = None;
+                }
+            });
         });
         return;
     }
 
-    field(ui, "Recipient address", &mut s.send.to, false);
-    if let Some(e) = &s.send_errors.to {
-        ui.colored_label(BAD, e);
-    }
-    field(ui, "Amount (PLNE)", &mut s.send.amount, false);
-    if let Some(e) = &s.send_errors.amount {
-        ui.colored_label(BAD, e);
-    }
-    ui.horizontal(|ui| {
-        ui.label("Fee");
-        let f = view.fees;
-        for (level, name) in [
-            (FeeLevel::Low, "Low"),
-            (FeeLevel::Normal, "Normal"),
-            (FeeLevel::High, "High"),
-        ] {
-            let text = match f {
-                Some(f) => format!("{name} ({} PLNE)", api::format_plne(level.pick(&f))),
-                None => name.to_string(),
-            };
-            ui.radio_value(&mut s.send.level, level, text);
+    style::card(ui, |ui| {
+        ui.heading("Send");
+        ui.add_space(4.0);
+        field(ui, "Recipient address", &mut s.send.to, false);
+        if let Some(e) = &s.send_errors.to {
+            ui.colored_label(BAD, e);
+        }
+        field(ui, "Amount (PLNE)", &mut s.send.amount, false);
+        if let Some(e) = &s.send_errors.amount {
+            ui.colored_label(BAD, e);
+        }
+        if let Some(a) = view.account() {
+            style::caption(
+                ui,
+                &format!("You can spend {} PLNE", api::format_plne(a.spendable)),
+            );
+        }
+        ui.add_space(4.0);
+        style::caption(ui, "Fee");
+        ui.horizontal_wrapped(|ui| {
+            let f = view.fees;
+            for (level, name) in [
+                (FeeLevel::Low, "Low"),
+                (FeeLevel::Normal, "Normal"),
+                (FeeLevel::High, "High"),
+            ] {
+                let text = match f {
+                    Some(f) => format!("{name} ({} PLNE)", api::format_plne(level.pick(&f))),
+                    None => name.to_string(),
+                };
+                ui.radio_value(&mut s.send.level, level, text);
+            }
+        });
+        ui.add_space(6.0);
+        if style::primary(ui, "Review").clicked() {
+            match plan_send(&s.send, view.account(), view.fees.as_ref()) {
+                Ok(plan) => {
+                    s.send_errors = FormErrors::default();
+                    s.confirm = Some(plan);
+                }
+                Err(e) => s.send_errors = e,
+            }
+        }
+        if let Some(e) = &s.send_errors.other {
+            ui.colored_label(BAD, e);
         }
     });
-    if ui.button("Review").clicked() {
-        match plan_send(&s.send, view.account(), view.fees.as_ref()) {
-            Ok(plan) => {
-                s.send_errors = FormErrors::default();
-                s.confirm = Some(plan);
-            }
-            Err(e) => s.send_errors = e,
-        }
-    }
-    if let Some(e) = &s.send_errors.other {
-        ui.colored_label(BAD, e);
-    }
     match &view.last_send {
         Some(Ok(txid)) => {
+            ui.add_space(8.0);
             ui.colored_label(GOOD, format!("Sent: {txid}"));
         }
         Some(Err(e)) => {
+            ui.add_space(8.0);
             ui.colored_label(BAD, format!("Not sent: {e}"));
         }
         None => {}
@@ -740,12 +858,15 @@ fn history_tab(ui: &mut egui::Ui, s: &mut Session, view: &NodeView) {
     let sent = model::read_sent(&sent_log_for(&s.path));
     match &view.history {
         HistoryState::Unsupported(why) => {
-            ui.colored_label(
-                WARN,
-                "This node keeps no address history, so only transfers sent from this wallet \
-                 are listed. Incoming transfers need a node with `addrindex = true`.",
-            );
-            ui.small(why);
+            style::card(ui, |ui| {
+                ui.colored_label(
+                    WARN,
+                    "This node keeps no address history, so only transfers sent from this \
+                     wallet are listed. Incoming transfers need a node with `addrindex = true`.",
+                );
+                ui.small(why);
+            });
+            ui.add_space(8.0);
         }
         HistoryState::Listed { hint: Some(h), .. } => {
             ui.small(h);
@@ -756,35 +877,51 @@ fn history_tab(ui: &mut egui::Ui, s: &mut Session, view: &NodeView) {
         ui.colored_label(BAD, e);
     }
     let rows = rows(view, &sent);
-    if rows.is_empty() {
-        ui.label("No transactions yet.");
-    }
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    style::card(ui, |ui| {
+        if rows.is_empty() {
+            ui.label("No transactions yet.");
+            return;
+        }
         egui::Grid::new("history")
             .striped(true)
             .num_columns(5)
+            .spacing([18.0, 8.0])
             .show(ui, |ui| {
-                if !rows.is_empty() {
-                    for h in [
-                        "Status",
-                        "Time (UTC)",
-                        "Type",
-                        "Amount, PLNE",
-                        "Counterparty",
-                    ] {
-                        ui.label(RichText::new(h).underline());
-                    }
-                    ui.end_row();
+                for h in [
+                    "Status",
+                    "Time (UTC)",
+                    "Type",
+                    "Amount, PLNE",
+                    "Counterparty",
+                ] {
+                    ui.label(RichText::new(h).small().strong());
                 }
+                ui.end_row();
                 for r in &rows {
                     ui.label(&r.status);
-                    ui.label(&r.when);
+                    ui.label(RichText::new(&r.when).small());
                     ui.label(format!("{} {}", r.kind, r.direction));
-                    ui.label(&r.amount);
-                    ui.monospace(if r.counterparty.is_empty() {
-                        short_id(&r.txid)
+                    let colour = if r.amount.starts_with('+') {
+                        style::INCOMING
+                    } else if r.amount.starts_with('-') {
+                        style::OUTGOING
                     } else {
-                        r.counterparty.clone()
+                        ui.visuals().text_color()
+                    };
+                    ui.label(RichText::new(&r.amount).color(colour).strong());
+                    ui.label(
+                        RichText::new(if r.counterparty.is_empty() {
+                            short_id(&r.txid)
+                        } else {
+                            short_address(&r.counterparty)
+                        })
+                        .monospace()
+                        .small(),
+                    )
+                    .on_hover_text(if r.counterparty.is_empty() {
+                        &r.txid
+                    } else {
+                        &r.counterparty
                     });
                     ui.end_row();
                 }
@@ -794,6 +931,7 @@ fn history_tab(ui: &mut egui::Ui, s: &mut Session, view: &NodeView) {
             ..
         } = &view.history
         {
+            ui.add_space(6.0);
             if ui.button("Load more").clicked() {
                 s.worker.send(Cmd::MoreHistory);
             }
@@ -810,157 +948,178 @@ fn settings_tab(
 ) -> (bool, Option<String>) {
     let mut save = false;
     let mut copy = None;
-    ui.heading("Node");
-    field(ui, "Node RPC address", &mut settings.node, false);
-    field(
-        ui,
-        "RPC token (if the node needs one)",
-        &mut settings.token,
-        true,
-    );
-    ui.horizontal(|ui| {
-        ui.label("Lock after (minutes, 0 = never)");
-        let mut m = settings.lock_after_minutes.to_string();
-        if ui.text_edit_singleline(&mut m).changed() {
-            if let Ok(n) = m.trim().parse() {
-                settings.lock_after_minutes = n;
-            }
-        }
-    });
-    if ui.button("Save and reconnect").clicked() {
-        save = true;
-    }
-    if let Some(n) = note {
-        ui.colored_label(WARN, n);
-    }
-
-    ui.separator();
-    ui.heading("Key file");
-    ui.label(format!("{}  kdf {}", s.path.display(), s.summary.kdf));
-    ui.label(if s.summary.encrypted {
-        "Write a copy under a new passphrase (argon2id). The current file is left as it is."
-    } else {
-        "Write a protected copy (argon2id). The current file stays, unencrypted: delete it \
-         yourself once the copy opens and the backup is safe."
-    });
-    if s.protect.new_path.is_empty() {
-        s.protect.new_path = protected_path(&s.path).display().to_string();
-    }
-    field(ui, "New key file", &mut s.protect.new_path, false);
-    field(ui, "New passphrase", &mut s.protect.pass, true);
-    field(ui, "Repeat new passphrase", &mut s.protect.pass2, true);
-    if ui.button("Write protected copy").clicked() {
-        s.protect.outcome = Some(
-            match passphrase_problem(&s.protect.pass, &s.protect.pass2) {
-                Some(e) => Err(e),
-                None => {
-                    let out = PathBuf::from(s.protect.new_path.trim());
-                    let pass = secret(&s.protect.pass);
-                    match s.key.rewrap(&out, Some(&pass), Kdf::RECOMMENDED) {
-                        Ok(_) => {
-                            settings.key_file = out.display().to_string();
-                            save = true;
-                            Ok(format!(
-                                "Written: {}. It opens with the new passphrase from now on.",
-                                out.display()
-                            ))
-                        }
-                        Err(e) => Err(e.to_string()),
-                    }
-                }
-            },
+    style::card(ui, |ui| {
+        ui.heading("Node");
+        field(ui, "Node RPC address", &mut settings.node, false);
+        field(
+            ui,
+            "RPC token (if the node needs one)",
+            &mut settings.token,
+            true,
         );
-        s.protect.pass.clear();
-        s.protect.pass2.clear();
-    }
-    match &s.protect.outcome {
-        Some(Ok(m)) => {
-            ui.colored_label(GOOD, m);
-        }
-        Some(Err(e)) => {
-            ui.colored_label(BAD, e);
-        }
-        None => {}
-    }
-
-    ui.separator();
-    ui.heading("Backup");
-    ui.label("The backup string restores this wallet anywhere. Showing it needs the passphrase.");
-    if let Some(b) = s.reveal.shown.clone() {
-        ui.monospace(&b);
         ui.horizontal(|ui| {
+            ui.label("Lock after (minutes, 0 = never)");
+            let mut m = settings.lock_after_minutes.to_string();
             if ui
-                .button("Copy backup (wiped from the clipboard in 60 s)")
-                .clicked()
+                .add(egui::TextEdit::singleline(&mut m).desired_width(60.0))
+                .changed()
             {
-                copy = Some(b.clone());
-            }
-            if ui.button("Hide").clicked() {
-                s.reveal = RevealForm::default();
+                if let Ok(n) = m.trim().parse() {
+                    settings.lock_after_minutes = n;
+                }
             }
         });
-    } else {
-        if s.summary.encrypted {
-            field(
-                ui,
-                "Passphrase to show the backup",
-                &mut s.reveal.pass,
-                true,
-            );
+        ui.add_space(4.0);
+        if style::primary(ui, "Save and reconnect").clicked() {
+            save = true;
         }
-        if ui.button("Show backup").clicked() {
-            let ok = if s.summary.encrypted {
-                let pass = secret(&s.reveal.pass);
-                s.reveal.pass.clear();
-                api::open(&s.path, Some(&pass)).map(|_| ())
-            } else {
-                Ok(())
-            };
-            match ok {
-                Ok(()) => s.reveal.shown = Some(s.key.backup_string()),
-                Err(e) => s.reveal.error = Some(e.to_string()),
+        if let Some(n) = note {
+            ui.colored_label(WARN, n);
+        }
+    });
+
+    ui.add_space(10.0);
+    style::card(ui, |ui| {
+        ui.heading("Key file");
+        ui.monospace(s.path.display().to_string());
+        style::caption(ui, &format!("kdf {}", s.summary.kdf));
+        ui.add_space(4.0);
+        ui.label(if s.summary.encrypted {
+            "Write a copy under a new passphrase (argon2id). The current file is left as it is."
+        } else {
+            "Write a protected copy (argon2id). The current file stays, unencrypted: delete it \
+             yourself once the copy opens and the backup is safe."
+        });
+        if s.protect.new_path.is_empty() {
+            s.protect.new_path = protected_path(&s.path).display().to_string();
+        }
+        field(ui, "New key file", &mut s.protect.new_path, false);
+        field(ui, "New passphrase", &mut s.protect.pass, true);
+        field(ui, "Repeat new passphrase", &mut s.protect.pass2, true);
+        if ui.button("Write protected copy").clicked() {
+            s.protect.outcome = Some(
+                match passphrase_problem(&s.protect.pass, &s.protect.pass2) {
+                    Some(e) => Err(e),
+                    None => {
+                        let out = PathBuf::from(s.protect.new_path.trim());
+                        let pass = secret(&s.protect.pass);
+                        match s.key.rewrap(&out, Some(&pass), Kdf::RECOMMENDED) {
+                            Ok(_) => {
+                                settings.key_file = out.display().to_string();
+                                save = true;
+                                Ok(format!(
+                                    "Written: {}. It opens with the new passphrase from now on.",
+                                    out.display()
+                                ))
+                            }
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                },
+            );
+            s.protect.pass.clear();
+            s.protect.pass2.clear();
+        }
+        match &s.protect.outcome {
+            Some(Ok(m)) => {
+                ui.colored_label(GOOD, m);
+            }
+            Some(Err(e)) => {
+                ui.colored_label(BAD, e);
+            }
+            None => {}
+        }
+    });
+
+    ui.add_space(10.0);
+    style::card(ui, |ui| {
+        ui.heading("Backup");
+        ui.label(
+            "The backup string restores this wallet anywhere. Showing it needs the passphrase.",
+        );
+        if let Some(b) = s.reveal.shown.clone() {
+            ui.monospace(&b);
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Copy backup (wiped from the clipboard in 60 s)")
+                    .clicked()
+                {
+                    copy = Some(b.clone());
+                }
+                if ui.button("Hide").clicked() {
+                    s.reveal = RevealForm::default();
+                }
+            });
+        } else {
+            if s.summary.encrypted {
+                field(
+                    ui,
+                    "Passphrase to show the backup",
+                    &mut s.reveal.pass,
+                    true,
+                );
+            }
+            if ui.button("Show backup").clicked() {
+                let ok = if s.summary.encrypted {
+                    let pass = secret(&s.reveal.pass);
+                    s.reveal.pass.clear();
+                    api::open(&s.path, Some(&pass)).map(|_| ())
+                } else {
+                    Ok(())
+                };
+                match ok {
+                    Ok(()) => s.reveal.shown = Some(s.key.backup_string()),
+                    Err(e) => s.reveal.error = Some(e.to_string()),
+                }
+            }
+            if let Some(e) = &s.reveal.error {
+                ui.colored_label(BAD, e);
             }
         }
-        if let Some(e) = &s.reveal.error {
-            ui.colored_label(BAD, e);
-        }
-    }
+    });
     (save, copy)
 }
 
 fn node_line(ui: &mut egui::Ui, view: &NodeView) {
-    match &view.chain {
-        Some(Ok(c)) => {
-            let colour = if c.sync == "synced" { GOOD } else { WARN };
-            ui.colored_label(
-                colour,
-                format!(
-                    "Node: {} at height {}, {} peer(s)",
-                    c.sync, c.height, c.peers
-                ),
-            );
-        }
-        Some(Err(e)) => {
-            ui.colored_label(BAD, format!("Node: {e}"));
-        }
-        None => {
-            ui.label("Node: connecting");
-        }
+    let (colour, text) = match &view.chain {
+        Some(Ok(c)) => (
+            if c.sync == "synced" { GOOD } else { WARN },
+            format!(
+                "Node: {} at height {}, {} peer(s)",
+                c.sync, c.height, c.peers
+            ),
+        ),
+        Some(Err(e)) => (BAD, format!("Node: {e}")),
+        None => (WARN, "Node: connecting".to_string()),
+    };
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 4.5, colour);
+        ui.label(RichText::new(text).small());
+    });
+}
+
+/// `plne1abcdefgh...wxyz`: enough to recognise, short enough for a table.
+fn short_address(a: &str) -> String {
+    if a.len() > 22 {
+        format!("{}...{}", &a[..13], &a[a.len() - 6..])
+    } else {
+        a.to_string()
     }
 }
 
 /// A labelled single-line field; the label names it for screen readers and tests.
 fn field(ui: &mut egui::Ui, label: &str, value: &mut String, secret: bool) -> egui::Response {
-    ui.horizontal(|ui| {
-        let l = ui.label(label);
-        ui.add(
+    let l = ui.label(RichText::new(label).small().weak());
+    let r = ui
+        .add(
             egui::TextEdit::singleline(value)
                 .password(secret)
-                .desired_width(420.0),
+                .desired_width(f32::INFINITY),
         )
-        .labelled_by(l.id)
-    })
-    .inner
+        .labelled_by(l.id);
+    ui.add_space(2.0);
+    r
 }
 
 fn secret(s: &str) -> SecretBytes {

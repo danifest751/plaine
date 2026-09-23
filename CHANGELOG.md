@@ -72,6 +72,11 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Changed
 
+- Desktop wallet: a visual pass. A navigation bar and a node status bar; screens as
+  cards in a centred column; a larger type scale and an accent colour, following the
+  system's light or dark theme; the spendable balance in large type; the address with a
+  QR code; the history as a table with incoming amounts in green and outgoing in red;
+  forms with labels above full-width fields.
 - Node: **the stratum server listens on `127.0.0.1:9258` by default**, not `0.0.0.0:9258`.
   A node started with no config no longer opens its mining server to every network it is
   on. Miners on other machines, or a pool front-end, need `[stratum] listen =

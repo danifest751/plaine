@@ -24,8 +24,9 @@ in Settings together with an RPC token.
   backup string. New keys are sealed with argon2id (`kdf: argon2id-v1`), with a
   passphrase of at least 12 characters; *Suggest a passphrase* makes a random one. A new
   key's backup string is shown once, until you confirm you wrote it down.
-- **Home:** your address (copy), spendable, maturing and total balance, pending sends, and
-  the node's state. An unencrypted key file (`kdf: none`) is flagged.
+- **Home:** the spendable balance in large type, maturing and total balance, pending
+  sends; your address with a copy button and a QR code; the node's state in the status
+  bar. An unencrypted key file (`kdf: none`) is flagged.
 - **Send:** recipient checked as bech32m, amount in PLNE, fee Low/Normal/High from the
   node's `fee_suggest`, never below the relay floor; the nonce comes from the node's
   `pendingNonce`. A confirmation screen shows the total before anything is signed.

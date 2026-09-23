@@ -368,9 +368,11 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   copy of the key, the backup behind the passphrase). Node calls run on a worker thread.
   21 headless tests (`egui_kittest`) and model tests, a separation test for the lock
   file. Checked by hand against a synced indexing node: the owner's address shows its
-  14 incoming pool payouts. Still to do: QR code, the end-to-end run against a real
-  node (phase 4), and a visual pass the owner asked for after seeing the first version:
-  layout, typography, colours, a proper history table.
+  14 incoming pool payouts. The end-to-end run came in phase 4. The visual pass the owner
+  asked for is done: type scale, spacing and an accent, a navigation bar and a node
+  status bar, content in a centred column of cards, a large balance, the address with a
+  QR code, a history table with incoming and outgoing amounts in colour. Checked on the
+  desktop against the owner's wallet.
 - [x] **Phase 4** — done. The main scenario runs through the GUI against a real
   `plaine-noded` and `plaine-miner` (`wallet-gui/tests/e2e.rs`, under `check.sh --e2e`):
   keys A and B created on the first-run screen, A mined past maturity, A sends to B on
