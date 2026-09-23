@@ -300,13 +300,14 @@ fn banner(cfg: &Config, paths: &Paths, bound: std::net::SocketAddr) {
     log::info(
         "node",
         format!(
-            "storage      {}  txindex {}",
+            "storage      {}  txindex {}  addrindex {}",
             if cfg.prune {
                 format!("pruned, keeping {} block bodies", log::thousands(k::BLOCKS_PER_YEAR))
             } else {
                 "archive, keeping every block body".to_string()
             },
-            if cfg.txindex { "on" } else { "off" }
+            if cfg.txindex { "on" } else { "off" },
+            if cfg.addrindex { "on" } else { "off" }
         ),
     );
 

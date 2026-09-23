@@ -204,6 +204,7 @@ pub fn start(cfg: &Config, paths: &Paths) -> Result<Node, StartError> {
     );
     store_cfg.prune = cfg.prune;
     store_cfg.txindex = cfg.txindex;
+    store_cfg.addrindex = cfg.addrindex;
 
     store_cfg.ibd_batch_blocks = Some(RING_MAX_BLOCKS as u32);
 

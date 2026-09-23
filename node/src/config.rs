@@ -152,6 +152,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub prune: bool,
     pub txindex: bool,
+    pub addrindex: bool,
     pub verify_frames: bool,
     pub p2p_listen: SocketAddr,
     pub max_peers: usize,
@@ -226,6 +227,7 @@ const SCHEMA: &[Field] = &[
     Field { section: "node", key: "data_dir", kind: Kind::Str },
     Field { section: "node", key: "prune", kind: Kind::Bool },
     Field { section: "node", key: "txindex", kind: Kind::Bool },
+    Field { section: "node", key: "addrindex", kind: Kind::Bool },
     Field { section: "node", key: "verify_frames", kind: Kind::Bool },
     Field { section: "p2p", key: "listen", kind: Kind::Str },
     Field { section: "p2p", key: "max_peers", kind: Kind::Int },
@@ -573,7 +575,16 @@ fn build(path: &str, doc: &Document, ov: &Overrides) -> Result<Config, Diagnosti
 
     let prune = r.bool("node", "prune", true);
     let txindex = r.bool("node", "txindex", false);
+    let addrindex = r.bool("node", "addrindex", false);
     let verify_frames = r.bool("node", "verify_frames", false);
+    if addrindex && prune {
+        warnings.push(
+            "node.addrindex = true with node.prune = true: account_getHistory can only describe \
+             transactions whose block bodies are still stored (the last 525960). Set \
+             prune = false for a full history."
+                .into(),
+        );
+    }
     if txindex && prune {
         warnings.push(
             "node.txindex = true with node.prune = true: the index only covers blocks whose \
@@ -1101,6 +1112,7 @@ fn build(path: &str, doc: &Document, ov: &Overrides) -> Result<Config, Diagnosti
         data_dir,
         prune,
         txindex,
+        addrindex,
         verify_frames,
         p2p_listen,
         max_peers,
@@ -1222,6 +1234,10 @@ pub fn default_config_text(network: Network) -> String {
 # txindex = false              # index every txid so tx_get can find confirmed
                                # transactions. Costs ~0.9 GB/year and requires
                                # a resync to build.
+# addrindex = false            # index which transactions touch each address, so
+                               # account_getHistory can list them (the desktop
+                               # wallet needs it). Covers blocks connected after
+                               # it is switched on; resync for the full chain.
 # verify_frames = false        # the two deep integrity sweeps at boot.
                                # L2 (bodies): re-checks every frame of every
                                # sealed body segment against its anchor. Catches
@@ -1456,6 +1472,7 @@ impl Config {
             ("node", "data_dir") => format!("{:?}", self.data_dir.display().to_string()),
             ("node", "prune") => self.prune.to_string(),
             ("node", "txindex") => self.txindex.to_string(),
+            ("node", "addrindex") => self.addrindex.to_string(),
             ("node", "verify_frames") => self.verify_frames.to_string(),
             ("p2p", "listen") => format!("{:?}", self.p2p_listen.to_string()),
             ("p2p", "max_peers") => self.max_peers.to_string(),

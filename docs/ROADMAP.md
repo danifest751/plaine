@@ -105,7 +105,7 @@ Estimates are working days, with margin. Phases 3 and 4 run in parallel.
 `addrindex = true`. A table of "address → (height, tx index)" written when a block is
 connected. Rows are not deleted on a reorg: as with `txindex`, a reader checks each hit
 against the body that is canonical at that height, so rows from a replaced block drop out
-by themselves. A new RPC method `account_getHistory(address, cursor, limit)` with cursor
+by themselves. A new RPC method `account_getHistory(address, limit, cursor)` with cursor
 paging in the style of `author_getNotes`. Without the index it fails with an explanation,
 as `tx_get` does without `txindex`.
 
@@ -299,7 +299,8 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   loopback buffers; `llvm-ar` standing in for `dlltool` writes broken import libraries.
   A clean rebuild runs 2,100 tests with 0 failures. Measurement 0.5 moves to phase 4,
   where the harness that needs it is written.
-- [ ] Phase 1 — in progress: storage side of the address index
+- [ ] Phase 1 — in progress. 1.1 done: `addrindex` and `account_getHistory`, with storage,
+  RPC and real-node tests; the method is documented in `docs/rpc.md`, which 1.4 extends.
 - [ ] Phase 2
 - [ ] Phase 3
 - [ ] Phase 4
