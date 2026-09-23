@@ -11,6 +11,7 @@ use crate::error::{Result, WalletError};
 use crate::keyfile::{self, KeyFile, Role};
 use crate::secret::{Secret32, SecretBytes};
 use crate::{amount, journal, kdf, sechex, sig, txbuild};
+pub use crate::kdf::Kdf;
 use plaine_consensus::constants::Network;
 
 /// Advice that goes with a result. The text is what the CLI prints.
@@ -25,7 +26,7 @@ pub enum Notice {
     /// Keep the passphrase apart from the seed material.
     KeepPassphraseApart,
     /// Author and checkpoint keys belong on an air-gapped machine.
-    AirGapThisRole,
+    AirGapThisRole { memory_hard: bool },
     /// The seed came without a checksum; nothing verified the transcription.
     UncheckedSeed,
     /// Opening this file takes several times the default KDF work.
@@ -55,10 +56,15 @@ impl Notice {
                  Anyone holding both has this file in plaintext."
                     .into(),
             ],
-            Notice::AirGapThisRole => vec![
+            Notice::AirGapThisRole { memory_hard } => vec![
                 "This is an author or checkpoint key. Generate it and keep it air-gapped.".into(),
                 "For these roles what protects the key is keeping the file out of reach.".into(),
-                "The KDF here is not memory-hard, so do not lean on the passphrase.".into(),
+                if *memory_hard {
+                    "A memory-hard KDF slows guessing; it does not replace keeping the file away."
+                } else {
+                    "The KDF here is not memory-hard, so do not lean on the passphrase."
+                }
+                .into(),
             ],
             Notice::UncheckedSeed => vec![
                 "note: this seed carries no checksum (64 digits, not 68), so nothing verified \
@@ -77,7 +83,7 @@ impl Notice {
 
     /// Whether the CLI frames this notice as a block rather than a single line.
     pub fn is_block(&self) -> bool {
-        matches!(self, Notice::Unencrypted | Notice::AirGapThisRole)
+        matches!(self, Notice::Unencrypted | Notice::AirGapThisRole { .. })
     }
 }
 
@@ -161,15 +167,16 @@ pub struct Created {
 /// Writes a new key file at `path` and proves it opens.
 ///
 /// `seed` is `None` to mint one from the OS CSPRNG, or seed material from
-/// [`decode_seed_text`]. The file is written, read back and opened with the same
-/// passphrase before this returns; if that fails, nothing is left behind. An existing
-/// file is never overwritten.
+/// [`decode_seed_text`]. With a passphrase the file is sealed under `with`; new keys
+/// should use [`Kdf::RECOMMENDED`] (argon2id). The file is written, read back and
+/// opened with the same passphrase before this returns; if that fails, nothing is
+/// left behind. An existing file is never overwritten.
 pub fn create_key(
     path: &Path,
     role: Role,
     seed: Option<Secret32>,
     passphrase: Option<&SecretBytes>,
-    iters: u64,
+    with: Kdf,
 ) -> Result<Created> {
     if path.exists() {
         return Err(WalletError::refused(format!(
@@ -177,47 +184,42 @@ pub fn create_key(
             path.display()
         )));
     }
-    check_iters(iters)?;
+    with.check()?;
     let generated = seed.is_none();
     let seed = match seed {
         Some(s) => s,
         None => crate::rng::generate_seed()?,
     };
-    let kf = KeyFile::seal(role, crate::now_secs(), &seed, passphrase, iters)?;
+    let kf = KeyFile::seal_with(role, crate::now_secs(), &seed, passphrase, with)?;
     keyfile::create_verified(path, &kf, passphrase, &kf.pubkey)?;
-    Ok(Created { summary: KeySummary::of(&kf), generated, notices: create_notices(role, passphrase.is_some(), iters) })
+    let notices = create_notices(role, passphrase.is_some(), with);
+    Ok(Created { summary: KeySummary::of(&kf), generated, notices })
 }
 
-/// The advice that goes with creating a key of `role`, with or without a passphrase.
-pub fn create_notices(role: Role, encrypted: bool, iters: u64) -> Vec<Notice> {
+/// The advice that goes with creating a key of `role`, with or without a passphrase,
+/// sealed under `with`.
+pub fn create_notices(role: Role, encrypted: bool, with: Kdf) -> Vec<Notice> {
     let mut out = Vec::new();
     if !encrypted {
         out.push(Notice::Unencrypted);
     } else {
-        if iters < kdf::WARN_BELOW_ITERS {
-            out.push(Notice::FewIterations { iters });
+        if let Kdf::Blake3Iter { iters } = with {
+            if iters < kdf::WARN_BELOW_ITERS {
+                out.push(Notice::FewIterations { iters });
+            }
+            out.push(Notice::KdfNotMemoryHard);
         }
-        out.push(Notice::KdfNotMemoryHard);
         out.push(Notice::KeepPassphraseApart);
     }
     if role == Role::Author || role == Role::Checkpoint {
-        out.push(Notice::AirGapThisRole);
+        out.push(Notice::AirGapThisRole { memory_hard: encrypted && with.is_memory_hard() });
     }
     out
 }
 
-/// Refuses a KDF work factor above [`kdf::MAX_ITERS`].
+/// Refuses a `blake3-iter-v1` work factor above [`kdf::MAX_ITERS`].
 pub fn check_iters(iters: u64) -> Result<()> {
-    if iters > kdf::MAX_ITERS {
-        return Err(WalletError::usage(format!(
-            "--kdf-iters {iters} is above the ceiling of {}; at roughly one second per \
-             {} iterations, opening the file would take longer than anyone will wait \
-             and buys no real strength",
-            kdf::MAX_ITERS,
-            kdf::DEFAULT_ITERS
-        )));
-    }
-    Ok(())
+    Kdf::Blake3Iter { iters }.check()
 }
 
 /// An opened key: the seed, decrypted and checked against the file's public key.
@@ -313,7 +315,7 @@ impl OpenKey {
         &self,
         out: &Path,
         passphrase: Option<&SecretBytes>,
-        iters: u64,
+        with: Kdf,
     ) -> Result<(KeySummary, Option<usize>)> {
         if out == self.path {
             return Err(WalletError::refused(
@@ -340,8 +342,9 @@ impl OpenKey {
                 self.path.display()
             )));
         }
-        check_iters(iters)?;
-        let newkf = KeyFile::seal(self.file.role, crate::now_secs(), &self.seed, passphrase, iters)?;
+        with.check()?;
+        let newkf =
+            KeyFile::seal_with(self.file.role, crate::now_secs(), &self.seed, passphrase, with)?;
         keyfile::create_verified(out, &newkf, passphrase, &self.file.pubkey)?;
         let carried = carry_journal(&jsrc, &jdst)?;
         Ok((KeySummary::of(&newkf), carried))

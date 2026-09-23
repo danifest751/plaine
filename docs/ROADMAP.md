@@ -278,7 +278,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 | # | question | recommendation |
 |---|---|---|
 | 1 | GUI framework | egui/eframe — decided: testable through kittest, one binary, no WebView |
-| 2 | KDF v2 on argon2id | yes if a new wallet dependency is acceptable; otherwise strong generated passphrases in the GUI |
+| 2 | KDF v2 on argon2id | decided: yes, with the library in `wallet-gui/` rather than the wallet crate; older key files keep opening |
 | 3 | Stratum on `127.0.0.1` by default | decided: changed in the fork, called out in `CHANGELOG.md` and `FORK.md` |
 | 4 | GUI licence | MIT, as upstream |
 | 5 | UI languages | English first; translations as separate resource files |
@@ -346,10 +346,17 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   after a restart, a note's `time`, `chainwork` below the tip.
   1.5 done: `fee_suggest` reads the transfer fees of the last 240 blocks, cached per tip;
   checked by unit tests and by the transfer end-to-end run.
-- [ ] Phase 2 — in progress. 2.1 done: `plaine_wallet::api` creates, imports, opens,
-  signs, backs up and re-wraps keys without printing, and returns advice as `Notice`s;
-  the CLI runs on it with unchanged output (its 141 tests pass as before) and
-  `wallet/tests/api.rs` covers the library face. 2.2 waits on the KDF decision.
+- [x] **Phase 2** — done. 2.1: `plaine_wallet::api` creates, imports, opens, signs, backs
+  up and re-wraps keys without printing, and returns advice as `Notice`s; the CLI runs
+  on it with unchanged output (its 141 tests pass as before). 2.2: `kdf: argon2id-v1`
+  (64 MiB, one lane, three passes by default). Upstream's structure test allows the
+  wallet no KDF library, so `plaine-wallet` knows the format and takes the algorithm as
+  a function a program installs at start-up; `wallet-gui/` links argon2 and installs it
+  in the desktop wallet and in `plaine-wallet-cli`. The node never compiles it. 2.3:
+  argon2id matches the reference implementation's vector; key files written by
+  upstream's wallet (`kdf: none` and `blake3-iter-v1`, kept as fixtures) open unchanged
+  and move to argon2id with the same address; a relabelled or cheapened file is caught
+  by the MAC. The owner's mining key (`kdf: none`) was checked to open with both builds.
 - [ ] Phase 3
 - [ ] Phase 4
 - [ ] Phase 5

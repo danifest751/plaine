@@ -70,12 +70,13 @@ KEYS
   new         --out <path> --role spend|author|checkpoint
               (--seed-stdin | --seed-file <p>)
               (--passphrase-file <p> | --passphrase-stdin | --no-passphrase)
-              [--kdf-iters <n>]
+              [--kdf argon2id|blake3-iter-v1] [--kdf-iters <n>]
   import      same flags as new; restores a key from a backup
   inspect     --in <path>                       (no passphrase)
   address     --in <path>                       (no passphrase; prints only the address)
   verify      --in <path> <passphrase source>   (check the passphrase still opens it)
   passphrase  --in <old> --out <new> --old-passphrase-file <p> --new-passphrase-file <p>
+              [--kdf argon2id|blake3-iter-v1] [--kdf-iters <n>]
   backup      --in <path> <passphrase source> --i-understand-this-prints-a-secret
 
 TRANSACTIONS
@@ -120,7 +121,7 @@ AUTHOR TOOLS (this build was compiled with --features author-tools)
 ";
 
 const CREATE_SPEC: Spec = Spec {
-    values: &["out", "role", "seed-file", "passphrase-file", "kdf-iters"],
+    values: &["out", "role", "seed-file", "passphrase-file", "kdf", "kdf-iters"],
     switches: &["seed-stdin", "passphrase-stdin", "no-passphrase"],
 };
 
@@ -142,7 +143,7 @@ fn create_key(argv: &[String], s: &mut Streams, verb: &str) -> Result<()> {
         )));
     }
     let role = Role::parse(a.require("role")?)?;
-    let iters = iters_flag(&a)?;
+    let with = kdf_flag(&a)?;
 
     // `new` with no seed source mints one from the OS CSPRNG. `import` always
     // needs the backup string it is restoring, so it never generates.
@@ -154,10 +155,10 @@ fn create_key(argv: &[String], s: &mut Streams, verb: &str) -> Result<()> {
     };
     let pass = ui::passphrase(&a, s, PassMode::Create)?;
 
-    for n in api::create_notices(role, pass.is_some(), iters) {
+    for n in api::create_notices(role, pass.is_some(), with) {
         print_notice(s, &n);
     }
-    let created = api::create_key(path, role, seed, pass.as_ref(), iters)?;
+    let created = api::create_key(path, role, seed, pass.as_ref(), with)?;
 
     s.say(&format!("{verb}: created {out}"));
     print_public_summary(s, &created.summary);
@@ -215,6 +216,8 @@ fn cmd_inspect(argv: &[String], s: &mut Streams) -> Result<()> {
     print_public_summary(s, &api::KeySummary::of(&kf));
     if kf.is_unencrypted() {
         s.warn_block(&["kdf: none - this file holds the seed in the clear."]);
+    } else if kf.kdf == kdf::KDF_ARGON2ID_V1 {
+        s.say("  note       argon2id-v1 costs 64 MiB of memory per guess");
     } else {
         s.say("  note       blake3-iter-v1 is not memory-hard");
     }
@@ -302,7 +305,7 @@ fn cmd_backup(argv: &[String], s: &mut Streams) -> Result<()> {
 }
 
 const PASSPHRASE_SPEC: Spec = Spec {
-    values: &["in", "out", "old-passphrase-file", "new-passphrase-file", "kdf-iters"],
+    values: &["in", "out", "old-passphrase-file", "new-passphrase-file", "kdf", "kdf-iters"],
     switches: &["old-no-passphrase", "new-no-passphrase"],
 };
 
@@ -340,9 +343,9 @@ fn cmd_passphrase(argv: &[String], s: &mut Streams) -> Result<()> {
     let old = read_named_passphrase(&a, "old", kf.is_unencrypted())?;
     let key = api::open(Path::new(&in_path), old.as_ref())?;
     let new = read_named_passphrase(&a, "new", a.has("new-no-passphrase"))?;
-    let iters = iters_flag(&a)?;
+    let with = kdf_flag(&a)?;
 
-    let (summary, carried) = key.rewrap(Path::new(&out_path), new.as_ref(), iters)?;
+    let (summary, carried) = key.rewrap(Path::new(&out_path), new.as_ref(), with)?;
     drop(key);
 
     s.say(&format!("passphrase: wrote {out_path}"));
@@ -375,6 +378,28 @@ fn report_journal(s: &mut Streams, src: &Path, dst: &Path, carried: Option<usize
          at a time, or the two journals diverge and neither sees the other's nonces.",
         src.display()
     ));
+}
+
+/// `--kdf` and `--kdf-iters`. The default stays `blake3-iter-v1`, which upstream's
+/// wallet also reads; `--kdf argon2id` seals under the memory-hard KDF, and then
+/// `--kdf-iters` counts its passes.
+fn kdf_flag(a: &Parsed) -> Result<kdf::Kdf> {
+    match a.get("kdf") {
+        None | Some("blake3-iter-v1") => Ok(kdf::Kdf::Blake3Iter { iters: iters_flag(a)? }),
+        Some("argon2id") | Some("argon2id-v1") => {
+            let passes = match a.get("kdf-iters") {
+                Some(v) => args::parse_u64("kdf-iters", v)?,
+                None => kdf::ARGON2_DEFAULT_PASSES,
+            };
+            let with = kdf::Kdf::Argon2id { passes };
+            with.check()?;
+            Ok(with)
+        }
+        Some(other) => Err(WalletError::usage(format!(
+            "--kdf {other:?} is not a KDF this wallet writes; use argon2id (memory-hard, \
+             recommended) or blake3-iter-v1 (the default, readable by older wallets)"
+        ))),
+    }
 }
 
 pub(crate) fn iters_flag(a: &Parsed) -> Result<u64> {

@@ -11,6 +11,7 @@ impl eframe::App for App {
 }
 
 fn main() -> eframe::Result {
+    plaine_wallet_gui::kdf::install();
     eframe::run_native(
         "Plaine wallet",
         eframe::NativeOptions::default(),

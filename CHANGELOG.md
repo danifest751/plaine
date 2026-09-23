@@ -7,6 +7,13 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Wallet: key files can be sealed under `kdf: argon2id-v1` (64 MiB, one lane, three
+  passes by default), a memory-hard KDF, instead of `blake3-iter-v1`, which is not.
+  `--kdf argon2id` on `new`, `import` and `passphrase`. The algorithm is installed by the
+  program: `plaine-wallet-cli` and the desktop wallet, both in `wallet-gui/`, have it;
+  the plain `plaine-wallet` keeps upstream's dependency policy and refuses such files by
+  name. Every existing key file opens as before; `kdf: none` and `blake3-iter-v1` files
+  written by upstream's wallet are kept as test fixtures and opened on every run.
 - Wallet: `plaine_wallet::api`, the wallet as a library for the desktop wallet: create,
   import and open a key, sign a transfer, print the backup string, change the
   passphrase, parse amounts and check addresses, with nothing written to a terminal.
