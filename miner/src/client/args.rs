@@ -205,7 +205,9 @@ fn resolve(
         let asked = client.threads;
         client.threads = work::MAX_WORKERS;
         notes.push(format!(
-            "{asked} workers asked for, {} used: a worker owns one of {} nonce lanes, and              workers past that repeat an earlier lane's nonces, which the server counts as              duplicate shares and bans for",
+            "{asked} workers asked for, {} used: a worker owns one of {} nonce lanes, and \
+             workers past that repeat an earlier lane's nonces, which the server counts as \
+             duplicate shares and bans for",
             work::MAX_WORKERS,
             work::MAX_WORKERS
         ));
@@ -736,6 +738,10 @@ mod tests {
         assert!(
             notes.iter().any(|n| n.contains("duplicate shares")),
             "the cap has to say why, not silently drop workers: {notes:?}"
+        );
+        assert!(
+            notes.iter().all(|n| !n.contains("  ")),
+            "a wrapped message must not print its source indentation: {notes:?}"
         );
     }
 
