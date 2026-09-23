@@ -550,6 +550,12 @@ pub struct Settings {
     pub token: String,
     pub key_file: String,
     pub lock_after_minutes: u64,
+    /// The miner program; empty means `plaine-miner` beside the wallet.
+    pub miner: String,
+    /// Where the miner gets work; empty means the node's host, port 9258.
+    pub stratum: String,
+    /// The worker name shown by the node or pool.
+    pub rig: String,
 }
 
 impl Default for Settings {
@@ -559,6 +565,9 @@ impl Default for Settings {
             token: String::new(),
             key_file: String::new(),
             lock_after_minutes: 10,
+            miner: String::new(),
+            stratum: String::new(),
+            rig: "wallet".into(),
         }
     }
 }
@@ -566,8 +575,14 @@ impl Default for Settings {
 impl Settings {
     pub fn render(&self) -> String {
         format!(
-            "node={}\ntoken={}\nkey_file={}\nlock_after_minutes={}\n",
-            self.node, self.token, self.key_file, self.lock_after_minutes
+            "node={}\ntoken={}\nkey_file={}\nlock_after_minutes={}\nminer={}\nstratum={}\nrig={}\n",
+            self.node,
+            self.token,
+            self.key_file,
+            self.lock_after_minutes,
+            self.miner,
+            self.stratum,
+            self.rig
         )
     }
 
@@ -582,6 +597,9 @@ impl Settings {
                 "node" if !v.is_empty() => s.node = v,
                 "token" => s.token = v,
                 "key_file" => s.key_file = v,
+                "miner" => s.miner = v,
+                "stratum" => s.stratum = v,
+                "rig" => s.rig = v,
                 "lock_after_minutes" => {
                     if let Ok(n) = v.parse() {
                         s.lock_after_minutes = n;

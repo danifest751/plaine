@@ -25,6 +25,9 @@ const RPC: u16 = 20_602;
 const STRATUM: u16 = 20_603;
 const MATURITY: u64 = 60;
 
+/// Both tests use the same ports, so they take turns even under a parallel runner.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
@@ -169,6 +172,7 @@ fn balance(address: &str) -> rpc::Account {
 #[test]
 #[ignore = "mines past coinbase maturity, minutes of real proof of work; scripts/check.sh --e2e runs it"]
 fn two_keys_made_in_the_gui_trade_through_the_send_screen() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("plaine-gui-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -237,5 +241,90 @@ fn two_keys_made_in_the_gui_trade_through_the_send_screen() {
         .unwrap();
     let held = balance(&addr_a).balance + balance(&addr_b).balance;
     assert_eq!(held, issued, "A and B hold every mile issued on this chain");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[ignore = "runs a real node and miner; scripts/check.sh --e2e runs it"]
+fn the_mining_tab_mines_to_the_wallet_and_shows_accepted_shares() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("plaine-gui-mining-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _node = start_node(&dir);
+
+    let key = dir.join("m.plnekey");
+    plaine_wallet::api::create_key(
+        &key,
+        plaine_wallet::keyfile::Role::Spend,
+        None,
+        None,
+        plaine_wallet::api::Kdf::Blake3Iter { iters: 0 },
+    )
+    .unwrap();
+    let address = plaine_wallet::api::inspect(&key).unwrap().address;
+
+    plaine_wallet_gui::kdf::install();
+    let connect: Connect = Arc::new(|_s: &Settings| Box::new(http()) as Box<dyn Transport>);
+    let settings = Settings {
+        key_file: key.display().to_string(),
+        node: format!("127.0.0.1:{RPC}"),
+        stratum: format!("127.0.0.1:{STRATUM}"),
+        miner: exe("miner/target/release/plaine-miner")
+            .display()
+            .to_string(),
+        rig: "gui".into(),
+        ..Settings::default()
+    };
+    let mut h = Harness::builder()
+        .with_size([1000.0, 1200.0])
+        .build_ui_state(
+            |ui, app: &mut WalletApp| app.show(ui),
+            WalletApp::for_tests(settings, connect),
+        );
+    h.run();
+    click(&mut h, "Open");
+    click(&mut h, "Mining");
+    click(&mut h, "Start mining");
+    h.get_by_label("Stop mining");
+
+    // The tab fills in from the miner's JSON lines as shares are accepted.
+    let t0 = Instant::now();
+    let accepted = loop {
+        h.run();
+        let shown = h
+            .query_all_by_label_contains(" accepted, ")
+            .filter_map(|n| n.value())
+            .find_map(|t| t.split(' ').next()?.parse::<u64>().ok())
+            .unwrap_or(0);
+        if shown >= 2 {
+            break shown;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(180),
+            "no accepted shares shown in 180 s"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    assert!(accepted >= 2);
+
+    // The node sees the wallet's worker, paying to the wallet's address.
+    let sessions = http().call("stratum_getSessions", json!([])).unwrap();
+    let worker = format!("{address}.gui");
+    assert!(
+        sessions
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["worker"] == worker.as_str()),
+        "{sessions}"
+    );
+
+    click(&mut h, "Stop mining");
+    h.get_by_label("Start mining");
+    assert!(
+        h.query_by_label("mining").is_none(),
+        "the state is no longer mining"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

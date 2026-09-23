@@ -351,3 +351,33 @@ fn a_node_that_is_down_is_said_so_and_the_key_still_opens() {
     click(&mut h, "Review");
     h.get_by_label_contains("waiting for the node");
 }
+
+#[test]
+fn the_mining_tab_says_when_the_miner_cannot_start() {
+    plaine_wallet_gui::kdf::install();
+    let dir = scratch("mining");
+    let path = plain_key(&dir);
+    let node = MockNode::upstream();
+    let connect: Connect =
+        Arc::new(move |_s: &Settings| Box::new(node.clone()) as Box<dyn Transport>);
+    let settings = Settings {
+        key_file: path.display().to_string(),
+        miner: dir.join("no-such-miner.exe").display().to_string(),
+        ..Settings::default()
+    };
+    let mut h = Harness::builder().with_size([900.0, 900.0]).build_ui_state(
+        |ui, app: &mut WalletApp| app.show(ui),
+        WalletApp::for_tests(settings, connect),
+    );
+    h.run();
+    click(&mut h, "Open");
+    click(&mut h, "Mining");
+    h.get_by_label_contains("paying to this wallet's address");
+    assert!(
+        h.query_all_by_value("127.0.0.1:9258").count() >= 1,
+        "the stratum server defaults to the node's host"
+    );
+    click(&mut h, "Start mining");
+    h.get_by_label_contains("cannot start");
+    h.get_by_label("Start mining");
+}

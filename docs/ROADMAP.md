@@ -380,5 +380,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   a Snapdragon 732G layout and `cargo check --target aarch64-linux-android`. 5.4 done:
   `--status-format json`, one object per line (status, share, block, summary), checked
   against a live node. 5.1 and 5.2 need nothing more (PRs stay as they are; measurements
-  are in `FORK.md`).
+  are in `FORK.md`). 5.5 done: the Mining tab starts and stops `plaine-miner` with a
+  Background or Maximum profile and shows its JSON status. 5.6 done: end to end, the tab
+  mines to the wallet on a real node and shows accepted shares (`wallet-gui/tests/e2e.rs`).
 - [ ] Phase 6

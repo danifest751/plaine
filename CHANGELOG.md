@@ -7,6 +7,10 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Desktop wallet: a Mining tab. It runs `plaine-miner` paying to the wallet's address, in
+  a Background (half the cores, idle priority) or Maximum profile, and shows the hash
+  rate, shares, blocks and height from the miner's JSON status. It keeps mining while the
+  wallet is locked and stops when the wallet closes.
 - Miner: `--status-format json` (and `"status-format"` in the config file) writes one JSON
   object per line on stdout: `status` every `--status` seconds, `share`, `block` and a
   final `summary`. Errors stay on stderr as text.

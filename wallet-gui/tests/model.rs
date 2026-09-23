@@ -186,6 +186,9 @@ fn settings_survive_a_round_trip() {
         token: "x".repeat(40),
         key_file: "C:/keys/w.plnekey".into(),
         lock_after_minutes: 3,
+        miner: "D:/tools/plaine-miner.exe".into(),
+        stratum: "10.0.0.2:9258".into(),
+        rig: "desk".into(),
     };
     assert_eq!(Settings::parse(&s.render()), s);
     assert_eq!(
