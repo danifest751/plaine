@@ -1,4 +1,5 @@
 use crate::amount;
+use crate::api;
 use crate::args::{self, Parsed, Spec};
 use crate::error::{Result, WalletError};
 use crate::genesis;
@@ -6,9 +7,7 @@ use crate::journal;
 use crate::kdf;
 use crate::keyfile::{self, KeyFile, Role};
 use crate::sanitize;
-use crate::sechex;
 use crate::secret::Secret32;
-use crate::sig;
 use crate::txbuild;
 use crate::ui::{self, PassMode, Streams};
 use plaine_consensus::codec::{AnnouncementTx, TransferTx};
@@ -71,12 +70,13 @@ KEYS
   new         --out <path> --role spend|author|checkpoint
               (--seed-stdin | --seed-file <p>)
               (--passphrase-file <p> | --passphrase-stdin | --no-passphrase)
-              [--kdf-iters <n>]
+              [--kdf argon2id|blake3-iter-v1] [--kdf-iters <n>]
   import      same flags as new; restores a key from a backup
   inspect     --in <path>                       (no passphrase)
   address     --in <path>                       (no passphrase; prints only the address)
   verify      --in <path> <passphrase source>   (check the passphrase still opens it)
   passphrase  --in <old> --out <new> --old-passphrase-file <p> --new-passphrase-file <p>
+              [--kdf argon2id|blake3-iter-v1] [--kdf-iters <n>]
   backup      --in <path> <passphrase source> --i-understand-this-prints-a-secret
 
 TRANSACTIONS
@@ -121,7 +121,7 @@ AUTHOR TOOLS (this build was compiled with --features author-tools)
 ";
 
 const CREATE_SPEC: Spec = Spec {
-    values: &["out", "role", "seed-file", "passphrase-file", "kdf-iters"],
+    values: &["out", "role", "seed-file", "passphrase-file", "kdf", "kdf-iters"],
     switches: &["seed-stdin", "passphrase-stdin", "no-passphrase"],
 };
 
@@ -143,57 +143,27 @@ fn create_key(argv: &[String], s: &mut Streams, verb: &str) -> Result<()> {
         )));
     }
     let role = Role::parse(a.require("role")?)?;
-    let iters = iters_flag(&a)?;
+    let with = kdf_flag(&a)?;
 
     // `new` with no seed source mints one from the OS CSPRNG. `import` always
     // needs the backup string it is restoring, so it never generates.
     let seed_supplied = a.has("seed-stdin") || a.get("seed-file").is_some();
-    let generated = verb == "new" && !seed_supplied;
-    let seed = if generated {
-        crate::rng::generate_seed()?
+    let seed = if verb == "new" && !seed_supplied {
+        None
     } else {
-        ui::seed(&a, s, verb == "import")?
+        Some(ui::seed(&a, s, verb == "import")?)
     };
     let pass = ui::passphrase(&a, s, PassMode::Create)?;
 
-    if pass.is_none() {
-        s.warn_block(&[
-            "kdf: none - the seed is stored in this file in the clear.",
-            "Anyone who reads the file has the key. It is allowed on purpose",
-            "and labelled as such.",
-        ]);
-    } else {
-        if iters < kdf::WARN_BELOW_ITERS {
-            s.warn(&format!(
-                "warning: kdf_iters {iters} is below the recommended {} ",
-                kdf::WARN_BELOW_ITERS
-            ));
-        }
-        s.warn(
-            "note: the KDF (blake3-iter-v1) is not memory-hard. Iterations raise the \
-             cost per guess linearly; they do not slow down a GPU.",
-        );
-        s.warn(
-            "note: use a generated passphrase, and keep it apart from the seed material. \
-             Anyone holding both has this file in plaintext.",
-        );
+    for n in api::create_notices(role, pass.is_some(), with) {
+        print_notice(s, &n);
     }
-    if role == Role::Author || role == Role::Checkpoint {
-        s.warn_block(&[
-            "This is an author or checkpoint key. Generate it and keep it air-gapped.",
-            "For these roles what protects the key is keeping the file out of reach.",
-            "The KDF here is not memory-hard, so do not lean on the passphrase.",
-        ]);
-    }
-
-    let created = crate::now_secs();
-    let kf = KeyFile::seal(role, created, &seed, pass.as_ref(), iters)?;
-    keyfile::create_verified(path, &kf, pass.as_ref(), &kf.pubkey)?;
+    let created = api::create_key(path, role, seed, pass.as_ref(), with)?;
 
     s.say(&format!("{verb}: created {out}"));
-    print_public_summary(s, &kf);
+    print_public_summary(s, &created.summary);
     s.say("");
-    if generated {
+    if created.generated {
         s.say("The seed was generated from the OS CSPRNG and never printed. It exists only");
         s.say("inside the key file above. Back it up before you rely on this address:");
         s.say(&format!(
@@ -206,7 +176,20 @@ fn create_key(argv: &[String], s: &mut Streams, verb: &str) -> Result<()> {
     Ok(())
 }
 
-fn print_public_summary(s: &mut Streams, kf: &KeyFile) {
+/// Prints a notice from the library the way this tool always has.
+fn print_notice(s: &mut Streams, n: &api::Notice) {
+    let lines = n.lines();
+    if n.is_block() {
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        s.warn_block(&refs);
+    } else {
+        for l in &lines {
+            s.warn(l);
+        }
+    }
+}
+
+fn print_public_summary(s: &mut Streams, kf: &api::KeySummary) {
     s.say(&format!("  role       {}", kf.role.as_str()));
     s.say(&format!("  created    {}", kf.created));
     s.say(&format!("  kdf        {} (iters {})", kf.kdf, kf.kdf_iters));
@@ -230,9 +213,11 @@ fn cmd_inspect(argv: &[String], s: &mut Streams) -> Result<()> {
     s.say(&format!("inspect: {path}"));
     s.say(&format!("  magic      {}", keyfile::MAGIC));
     s.say(&format!("  version    {}", kf.version));
-    print_public_summary(s, &kf);
+    print_public_summary(s, &api::KeySummary::of(&kf));
     if kf.is_unencrypted() {
         s.warn_block(&["kdf: none - this file holds the seed in the clear."]);
+    } else if kf.kdf == kdf::KDF_ARGON2ID_V1 {
+        s.say("  note       argon2id-v1 costs 64 MiB of memory per guess");
     } else {
         s.say("  note       blake3-iter-v1 is not memory-hard");
     }
@@ -256,13 +241,9 @@ fn cmd_verify(argv: &[String], s: &mut Streams) -> Result<()> {
     let path = a.require("in")?;
     let kf = keyfile::read(Path::new(path))?;
     let pass = open_passphrase(&a, s, &kf)?;
-    let seed = kf.open(pass.as_ref())?;
-    let derived = sig::public_key_of(&seed);
-    if derived != kf.pubkey {
-        return Err(WalletError::crypto("derived public key does not match the file"));
-    }
+    let key = api::open(Path::new(path), pass.as_ref())?;
     s.say(&format!("verify: OK  {path}"));
-    s.say(&format!("  address    {}", kf.address));
+    s.say(&format!("  address    {}", key.address()));
     s.say("  the passphrase opens this file and the seed derives the stored public key");
     Ok(())
 }
@@ -305,13 +286,14 @@ fn cmd_backup(argv: &[String], s: &mut Streams) -> Result<()> {
     let path = a.require("in")?;
     let kf = keyfile::read(Path::new(path))?;
     let pass = open_passphrase(&a, s, &kf)?;
-    let seed = kf.open(pass.as_ref())?;
+    let key = api::open(Path::new(path), pass.as_ref())?;
     s.warn_block(&[
         "The next line is a private key.",
         "It is now in your terminal scrollback and in anything recording this session.",
         "Write it on paper - all 68 characters - then close this terminal.",
     ]);
-    s.say(&sechex::encode_backup(&seed));
+    s.say(&key.backup_string());
+    drop(key);
     s.warn_block(&[
         "The last 4 characters are a checksum over the other 64. `import` checks it and",
         "refuses a string that does not match, so a one-character slip is caught instead",
@@ -323,7 +305,7 @@ fn cmd_backup(argv: &[String], s: &mut Streams) -> Result<()> {
 }
 
 const PASSPHRASE_SPEC: Spec = Spec {
-    values: &["in", "out", "old-passphrase-file", "new-passphrase-file", "kdf-iters"],
+    values: &["in", "out", "old-passphrase-file", "new-passphrase-file", "kdf", "kdf-iters"],
     switches: &["old-no-passphrase", "new-no-passphrase"],
 };
 
@@ -359,17 +341,16 @@ fn cmd_passphrase(argv: &[String], s: &mut Streams) -> Result<()> {
     kdf_cost_notice(s, &kf);
 
     let old = read_named_passphrase(&a, "old", kf.is_unencrypted())?;
-    let seed = kf.open(old.as_ref())?;
+    let key = api::open(Path::new(&in_path), old.as_ref())?;
     let new = read_named_passphrase(&a, "new", a.has("new-no-passphrase"))?;
-    let iters = iters_flag(&a)?;
+    let with = kdf_flag(&a)?;
 
-    let created = crate::now_secs();
-    let newkf = KeyFile::seal(kf.role, created, &seed, new.as_ref(), iters)?;
-    keyfile::create_verified(Path::new(&out_path), &newkf, new.as_ref(), &kf.pubkey)?;
+    let (summary, carried) = key.rewrap(Path::new(&out_path), new.as_ref(), with)?;
+    drop(key);
 
     s.say(&format!("passphrase: wrote {out_path}"));
-    print_public_summary(s, &newkf);
-    carry_journal(s, &jsrc, &jdst)?;
+    print_public_summary(s, &summary);
+    report_journal(s, &jsrc, &jdst, carried);
     s.say("");
     s.say(&format!(
         "{in_path} was not modified. Verify the new file, then remove the old one yourself:"
@@ -380,26 +361,15 @@ fn cmd_passphrase(argv: &[String], s: &mut Streams) -> Result<()> {
     Ok(())
 }
 
-fn carry_journal(s: &mut Streams, src: &Path, dst: &Path) -> Result<()> {
-    if !src.exists() {
+fn report_journal(s: &mut Streams, src: &Path, dst: &Path, carried: Option<usize>) {
+    let Some(n) = carried else {
         s.say(&format!("  journal    none beside {}", src.display()));
-        return Ok(());
-    }
-    let entries = journal::read(src)?;
-    std::fs::copy(src, dst).map_err(|e| {
-        WalletError::io(format!(
-            "the new key file was written, but its announcement journal could not be \
-             copied from {} to {}: {e}. Copy it by hand before signing anything with the \
-             new file: without it the nonce journal is empty and a second announcement \
-             at an already-used nonce will not be refused.",
-            src.display(),
-            dst.display()
-        ))
-    })?;
+        return;
+    };
     s.say(&format!(
         "  journal    carried {} entr{} to {}",
-        entries.len(),
-        if entries.len() == 1 { "y" } else { "ies" },
+        n,
+        if n == 1 { "y" } else { "ies" },
         dst.display()
     ));
     s.warn(&format!(
@@ -408,7 +378,28 @@ fn carry_journal(s: &mut Streams, src: &Path, dst: &Path) -> Result<()> {
          at a time, or the two journals diverge and neither sees the other's nonces.",
         src.display()
     ));
-    Ok(())
+}
+
+/// `--kdf` and `--kdf-iters`. The default stays `blake3-iter-v1`, which upstream's
+/// wallet also reads; `--kdf argon2id` seals under the memory-hard KDF, and then
+/// `--kdf-iters` counts its passes.
+fn kdf_flag(a: &Parsed) -> Result<kdf::Kdf> {
+    match a.get("kdf") {
+        None | Some("blake3-iter-v1") => Ok(kdf::Kdf::Blake3Iter { iters: iters_flag(a)? }),
+        Some("argon2id") | Some("argon2id-v1") => {
+            let passes = match a.get("kdf-iters") {
+                Some(v) => args::parse_u64("kdf-iters", v)?,
+                None => kdf::ARGON2_DEFAULT_PASSES,
+            };
+            let with = kdf::Kdf::Argon2id { passes };
+            with.check()?;
+            Ok(with)
+        }
+        Some(other) => Err(WalletError::usage(format!(
+            "--kdf {other:?} is not a KDF this wallet writes; use argon2id (memory-hard, \
+             recommended) or blake3-iter-v1 (the default, readable by older wallets)"
+        ))),
+    }
 }
 
 pub(crate) fn iters_flag(a: &Parsed) -> Result<u64> {
@@ -416,27 +407,14 @@ pub(crate) fn iters_flag(a: &Parsed) -> Result<u64> {
         Some(v) => args::parse_u64("kdf-iters", v)?,
         None => return Ok(kdf::DEFAULT_ITERS),
     };
-    if iters > kdf::MAX_ITERS {
-        return Err(WalletError::usage(format!(
-            "--kdf-iters {iters} is above the ceiling of {}; at roughly one second per \
-             {} iterations, opening the file would take longer than anyone will wait \
-             and buys no real strength",
-            kdf::MAX_ITERS,
-            kdf::DEFAULT_ITERS
-        )));
-    }
+    api::check_iters(iters)?;
     Ok(iters)
 }
 
 fn kdf_cost_notice(s: &mut Streams, kf: &KeyFile) {
+    // printed whether or not the file is encrypted, as it always was
     if kf.kdf_iters > kdf::NOTICE_ABOVE_ITERS {
-        s.warn(&format!(
-            "note: this key file uses {} KDF iterations ({}x the default of {}). Deriving \
-             the key prints nothing until it finishes; this is not a hang.",
-            kf.kdf_iters,
-            kf.kdf_iters / kdf::DEFAULT_ITERS,
-            kdf::DEFAULT_ITERS
-        ));
+        print_notice(s, &api::Notice::SlowToOpen { iters: kf.kdf_iters });
     }
 }
 
@@ -498,21 +476,20 @@ fn cmd_transfer(argv: &[String], s: &mut Streams) -> Result<()> {
     let nonce = args::parse_u64("nonce", a.require("nonce")?)?;
 
     let pass = open_passphrase(&a, s, &kf)?;
-    let seed = kf.open(pass.as_ref())?;
-    let tx = txbuild::build_transfer(network, &seed, &to, amount, fee, nonce)?;
-    drop(seed); // do not keep the decrypted seed alive past signing
+    let key = api::open(Path::new(a.require("in")?), pass.as_ref())?;
+    let tx = key.sign_transfer(network, &to, amount, fee, nonce)?;
+    drop(key); // do not keep the decrypted seed alive past signing
 
-    let hex = plaine_consensus::hex::encode(&tx.encode());
     s.say("transfer: signed (type 0x01)");
-    s.say(&format!("  txid       {}", plaine_consensus::hex::encode(&tx.txid())));
-    s.say(&format!("  from       {}", kf.address));
-    s.say(&format!("  to         {}", to));
+    s.say(&format!("  txid       {}", plaine_consensus::hex::encode(&tx.txid)));
+    s.say(&format!("  from       {}", tx.from));
+    s.say(&format!("  to         {}", tx.to));
     s.say(&format!("  amount     {}", amount::describe(amount)));
     s.say(&format!("  fee        {}", amount::describe(fee)));
     s.say(&format!("  nonce      {nonce}"));
     s.say(&chain_line(network));
-    s.say(&format!("  bytes      {}", tx.encode().len()));
-    emit(s, &a, &hex)?;
+    s.say(&format!("  bytes      {}", tx.raw.len()));
+    emit(s, &a, &tx.hex)?;
     fee_warning(s, fee);
     s.say("");
     s.say("The wallet has no network. Submit this with noded's RPC.");

@@ -1,5 +1,6 @@
 pub mod args;
 pub mod json;
+pub mod status;
 pub mod work;
 
 use crate::{pad, Miner, Pads, BATCH};
@@ -49,6 +50,8 @@ pub struct Args {
     /// (see `args::batch`); this default only matters to callers that build `Args`
     /// directly, such as tests.
     pub batch: usize,
+    /// What stdout carries: lines for people, or one JSON object per line.
+    pub status_format: status::Format,
 }
 
 impl Default for Args {
@@ -68,6 +71,7 @@ impl Default for Args {
             huge_pages: true,
             pins: None,
             batch: BATCH,
+            status_format: status::Format::Text,
         }
     }
 }
@@ -328,7 +332,7 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
     let mut subscribed = false;
     let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
     let mut jobs = JobTrack::default();
-    let mut status = Status::new(args.status_secs, start, args.verbose);
+    let mut status = Status::new(args.status_secs, start, args.verbose, args.status_format);
 
     let login_json = json_escape(&args.login);
 
@@ -359,11 +363,13 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
             }
             if sol.is_block {
                 totals.blocks += 1;
-                println!(
-                    "plaine-miner: block candidate at height {} - {}",
-                    sol.height,
-                    json::hex(&sol.pow_hash)
-                );
+                let hash = json::hex(&sol.pow_hash);
+                if args.status_format == status::Format::Json {
+                    let e = status::Event::Block { height: sol.height, hash: &hash };
+                    println!("{}", e.json());
+                } else {
+                    println!("plaine-miner: block candidate at height {} - {hash}", sol.height);
+                }
             }
             // Echo the server's own spelling of the job id, never a reformatted one.
             // The fallback cannot normally fire: submittable() just said this job is
@@ -641,18 +647,31 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
                     // as `result:true`, as `result:{"status":"OK"}` (rplant.xyz), and as
                     // a bare `error:null`; only an error object or a literal `false` is
                     // a refusal.
-                    if msg.is_error || msg.result_false {
+                    let accepted = !(msg.is_error || msg.result_false);
+                    if accepted {
+                        totals.accepted += 1;
+                    } else {
                         totals.rejected += 1;
+                    }
+                    if args.status_format == status::Format::Json {
+                        let e = status::Event::Share {
+                            accepted,
+                            total_accepted: totals.accepted,
+                            total_rejected: totals.rejected,
+                            code: (!accepted).then(|| msg.error_code.unwrap_or(0) as i64),
+                            message: if accepted { None } else { msg.error_msg.as_deref() },
+                        };
+                        println!("{}", e.json());
+                    } else if accepted {
+                        println!(
+                            "plaine-miner: share accepted ({} accepted, {} rejected)",
+                            totals.accepted, totals.rejected
+                        );
+                    } else {
                         eprintln!(
                             "plaine-miner: share rejected {} {}",
                             msg.error_code.unwrap_or(0),
                             msg.error_msg.as_deref().unwrap_or("")
-                        );
-                    } else {
-                        totals.accepted += 1;
-                        println!(
-                            "plaine-miner: share accepted ({} accepted, {} rejected)",
-                            totals.accepted, totals.rejected
                         );
                     }
                 }
@@ -737,10 +756,11 @@ struct Status {
     start: Instant,
     last_lanes: Vec<u64>,
     verbose: bool,
+    format: status::Format,
 }
 
 impl Status {
-    fn new(secs: u64, start: Instant, verbose: bool) -> Status {
+    fn new(secs: u64, start: Instant, verbose: bool, format: status::Format) -> Status {
         Status {
             every: (secs > 0).then(|| Duration::from_secs(secs)),
             last: Instant::now(),
@@ -748,6 +768,7 @@ impl Status {
             start,
             last_lanes: Vec::new(),
             verbose,
+            format,
         }
     }
 
@@ -766,6 +787,26 @@ impl Status {
         let up = self.start.elapsed();
         let avg = (r.hashes + hashes) as f64 / up.as_secs_f64().max(1e-9);
 
+        if self.format == status::Format::Json {
+            // The server's own spelling of the job id, as it is echoed on submit.
+            let job_hex = jobs.newest.and_then(|j| jobs.hex_of(j)).map(str::to_string);
+            println!(
+                "{}",
+                status::Event::Status {
+                    hashrate: rate,
+                    avg,
+                    accepted: r.accepted,
+                    rejected: r.rejected,
+                    blocks: r.blocks,
+                    job: job_hex.as_deref(),
+                    height: job.as_ref().map(|j| j.height).unwrap_or(0),
+                    uptime: up.as_secs(),
+                    threads: shared.lane_count(),
+                }
+                .json()
+            );
+            return;
+        }
         println!(
             "plaine-miner: {} | accepted {} rejected {} blocks {} | job {} height {} | avg {} | up {}",
             rate_str(rate),

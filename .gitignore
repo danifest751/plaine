@@ -25,6 +25,9 @@ passphrase.txt
 passphrase*.txt
 *.seed
 *.backup
+# The one exception: key files written by upstream's wallet from a published test
+# seed, so the tests can prove old files still open. See its README; nothing real.
+!wallet/tests/fixtures/*.plnekey
 
 # ---------------------------------------------------------------------------
 # Node state. Written into --data-dir, which defaults elsewhere but is often

@@ -27,10 +27,39 @@ in [CHANGELOG.md](CHANGELOG.md).
 - [docs/rpc.md](docs/rpc.md): a reference for every RPC method, checked against a running
   node, and `lib/rpc/tests/reference_doc.rs`, which fails when the two drift apart.
 
+**Wallet**
+
+- `plaine_wallet::api`: the wallet as a library, which the CLI now runs on and the
+  desktop wallet will.
+- A memory-hard key file KDF, `kdf: argon2id-v1`: 64 MiB and one lane per guess, three
+  passes by default, stored in the same key file format. The wallet crate may depend on
+  nothing but plaine-consensus, ed25519-dalek and getrandom (upstream pins that in
+  `wallet/tests/end_to_end.rs`), so it knows the format and takes argon2id as a function
+  a program installs at start-up. `wallet-gui/` links the `argon2` crate and installs it,
+  in the desktop wallet and in `plaine-wallet-cli`, the same command line with
+  `--kdf argon2id` available. The node does not compile it.
+- Key files made before keep opening, with any build: `kdf: none` and
+  `blake3-iter-v1`. `plaine-wallet-cli passphrase --kdf argon2id` moves one to
+  argon2id, same address, original untouched. The CLI's default for new
+  files stays `blake3-iter-v1`, so what it writes still opens in upstream's wallet;
+  upstream's wallet cannot open an `argon2id-v1` file and says so.
+
 **Miner**
 
 - The W^X batch is sized to the machine's L2 (`--batch N` to override), and workers are
-  pinned one per core before any SMT sibling (`--no-pin` to opt out).
+  pinned one per core before any SMT sibling (`--no-pin` to opt out), fastest core class
+  first.
+- Android: the processor topology is read as on Linux, and cores get one class per
+  `cpu_capacity` level (little, big, prime), so a phone's fastest cores are used first.
+  `scripts/build-android-static.sh` builds a static arm64 binary without the NDK; the
+  JIT's instruction-cache flush is done in the miner itself, so it needs no C runtime.
+  On a Poco X3 Pro (Snapdragon 860, Android 12) it passes the JIT self-check, benches
+  3.85 kH/s on 6 threads, and mined to rplant.xyz at 4.8-5.0 kH/s with 7 of 8 shares
+  accepted (the one refused was stale, after the pool went silent and the miner
+  reconnected). Such a static build cannot resolve host names on Android, which has no
+  `/etc/resolv.conf`: give the pool as an IP address.
+- `--status-format json`: one JSON object per line on stdout (status, share, block,
+  summary) for a program to read; the desktop wallet's Mining tab uses it.
 
 **Tests and tooling**
 
@@ -38,7 +67,7 @@ in [CHANGELOG.md](CHANGELOG.md).
   `tx_sendRaw` through the mempool into both parties' histories, and found again after a
   restart. Upstream's end-to-end tests mine a few blocks; none spends a mined reward.
 - `scripts/check.sh`: every check a commit must pass, in one command, instead of CI.
-- `wallet-gui/`: the start of the desktop wallet, in its own workspace.
+- `wallet-gui/`: the desktop wallet, in its own workspace; see `wallet-gui/README.md`.
 
 ## What the fork changes on purpose
 
@@ -154,6 +183,11 @@ README's quick start writes the key to, nor the passphrase files the README docu
   of `node_getBudgets` return 0 or empty instead of an error.
 - **Placeholders in answers.** A transaction's `decoded` is always `null`, and
   `chain_getBlockByHeight` at verbosity 2 returns an empty `txs`.
+- **A miner reconnecting to a fresh local node.** Once, in a full check run, the miner
+  started by the desktop wallet was seen reconnecting to a fresh test node a few seconds
+  after its first accepted shares; the node's log at `info` level gives no reason, and
+  five further runs did not repeat it. The end-to-end test now waits for the session to
+  log in again rather than reading it once.
 - **The committer after a failed apply.** While building the address index, an error
   returned half-way through applying a block left the storage committer unable to shut
   down (a test hung on drop). The fork checks a block's body before writing anything, so

@@ -70,6 +70,7 @@ const FIELDS: [&str; 12] = [
 ];
 
 impl KeyFile {
+    /// Seals under `blake3-iter-v1`, the KDF upstream's wallet reads.
     pub fn seal(
         role: Role,
         created: u64,
@@ -77,21 +78,35 @@ impl KeyFile {
         passphrase: Option<&SecretBytes>,
         iters: u64,
     ) -> Result<KeyFile> {
+        Self::seal_with(role, created, seed, passphrase, kdf::Kdf::Blake3Iter { iters })
+    }
+
+    /// Seals under `kdf` when there is a passphrase; with none, the seed is stored
+    /// in the clear and labelled `kdf: none`.
+    pub fn seal_with(
+        role: Role,
+        created: u64,
+        seed: &Secret32,
+        passphrase: Option<&SecretBytes>,
+        with: kdf::Kdf,
+    ) -> Result<KeyFile> {
         let pubkey = sig::public_key_of(seed);
         let address = crypto::address_from_pubkey(&pubkey);
         let salt = kdf::derive_salt(seed, created);
         let nonce = kdf::derive_nonce(seed, created);
 
         let (kdf_name, cipher_name, iters) = match passphrase {
-            Some(_) => (
-                kdf::KDF_BLAKE3_ITER_V1.to_string(),
-                kdf::CIPHER_BLAKE3_CTR_V1.to_string(),
-                iters,
-            ),
+            Some(_) => {
+                with.check()?;
+                (with.name().to_string(), kdf::CIPHER_BLAKE3_CTR_V1.to_string(), with.work())
+            }
             None => (kdf::KDF_NONE.to_string(), kdf::CIPHER_NONE.to_string(), 0),
         };
 
-        let key = kdf::effective_key(passphrase, &salt, iters);
+        let key = match passphrase {
+            Some(p) => with.derive(p, &salt)?,
+            None => kdf::effective_key(None, &salt, 0),
+        };
         let ciphertext = match passphrase {
             Some(_) => kdf::xor_seed(&key, &nonce, seed.expose()),
             None => *seed.expose(),
@@ -128,10 +143,12 @@ impl KeyFile {
                 "this key file has kdf: none and is not encrypted; do not pass a passphrase",
             ));
         }
-        if uses_kdf && self.kdf != kdf::KDF_BLAKE3_ITER_V1 {
+        let with = kdf::Kdf::from_file(&self.kdf, self.kdf_iters);
+        if uses_kdf && with.is_none() {
             return Err(WalletError::format(format!(
-                "unsupported kdf {:?}; this build understands {:?} and {:?}",
+                "unsupported kdf {:?}; this build understands {:?}, {:?} and {:?}",
                 self.kdf,
+                kdf::KDF_ARGON2ID_V1,
                 kdf::KDF_BLAKE3_ITER_V1,
                 kdf::KDF_NONE
             )));
@@ -143,7 +160,10 @@ impl KeyFile {
             )));
         }
 
-        let key = kdf::effective_key(passphrase, &self.kdf_salt, self.kdf_iters);
+        let key = match (with, passphrase) {
+            (Some(w), Some(p)) => w.derive(p, &self.kdf_salt)?,
+            _ => kdf::effective_key(None, &self.kdf_salt, 0),
+        };
         let expect = kdf::mac(&key, self.mac_input().as_bytes());
         if !ct_eq(&expect, &self.mac) {
             return Err(WalletError::crypto(
@@ -317,6 +337,16 @@ impl KeyFile {
             ));
         }
 
+        if kdf_name == kdf::KDF_ARGON2ID_V1
+            && !(1..=kdf::ARGON2_MAX_PASSES).contains(&kdf_iters)
+        {
+            return Err(WalletError::format(format!(
+                "line 6: kdf_iters {kdf_iters} is out of range for {}; it counts argon2id \
+                 passes, 1..={}",
+                kdf::KDF_ARGON2ID_V1,
+                kdf::ARGON2_MAX_PASSES
+            )));
+        }
         if kdf_iters > kdf::MAX_ITERS {
             return Err(WalletError::format(format!(
                 "line 6: kdf_iters {kdf_iters} exceeds the ceiling of {}; at roughly one \

@@ -1,17 +1,11 @@
 #![forbid(unsafe_code)]
 
-//! Spike: a minimal egui view that the headless test harness can drive.
-//! Replaced by the real wallet in phase 3 of docs/ROADMAP.md.
+//! The Plaine desktop wallet. Keys are handled by plaine-wallet's own code
+//! (`plaine_wallet::api`); the node is reached over its local JSON-RPC. The
+//! wallet holds no network connection of its own besides that one.
 
-pub struct Spike {
-    pub count: u32,
-}
-
-impl Spike {
-    pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
-        ui.label(format!("count: {}", self.count));
-        if ui.button("Increment").clicked() {
-            self.count += 1;
-        }
-    }
-}
+pub mod app;
+pub mod kdf;
+pub mod mining;
+pub mod model;
+pub mod rpc;

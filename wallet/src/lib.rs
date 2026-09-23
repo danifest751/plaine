@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod amount;
+pub mod api;
 pub mod args;
 pub mod error;
 pub mod genesis;

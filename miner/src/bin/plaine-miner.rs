@@ -82,6 +82,9 @@ RUNNING\n\
 \x20                        their `--`, the command line overrides it, and an\n\
 \x20                        unknown key is an error.\n\
 \x20 --status <secs>        Status line interval, 0 to silence. Default 10.\n\
+\x20 --status-format <f>    text (default) or json: one JSON object per line on\n\
+\x20                        stdout - status, share, block, summary - for a\n\
+\x20                        program to read. Errors stay on stderr as text.\n\
 \x20 --no-reconnect         Exit when the connection drops. Default: reconnect\n\
 \x20                        with backoff from 1s to 30s.\n\
 \x20 --max-reconnects <N>   Give up after N consecutive failed connections.\n\
@@ -293,6 +296,18 @@ fn run_mining(opts: &Options) -> std::process::ExitCode {
     match client::run(&opts.client) {
         Ok(r) => {
             let secs = t0.elapsed().as_secs_f64().max(1e-9);
+            if opts.client.status_format == client::status::Format::Json {
+                let e = client::status::Event::Summary {
+                    accepted: r.accepted,
+                    rejected: r.rejected,
+                    blocks: r.blocks,
+                    hashes: r.hashes,
+                    avg: r.hashes as f64 / secs,
+                    uptime: secs as u64,
+                };
+                println!("{}", e.json());
+                return std::process::ExitCode::SUCCESS;
+            }
             println!(
                 "plaine-miner: {} accepted, {} rejected, {} blocks, {} hashes, {} average, \
                  up {}",

@@ -182,6 +182,15 @@ wallet-gui/                  its own [workspace], like miner/
   surface.
 - **RPC client:** a minimal HTTP/1.1 client over `std::net` for a local node. Requests run
   on a background thread; the UI never blocks.
+- **Works with any node, upstream's included.** Consensus is unchanged, so balance,
+  sending and pending transactions work against an upstream `plaine-noded`. What an
+  older node or one without `addrindex` cannot answer degrades instead of failing: the
+  GUI probes `account_getHistory` once and, on "method not found" or "feature disabled",
+  shows the history of the wallet's own sends from a sent-transfer log it keeps beside
+  the key file (the CLI's journal records announcements only), each confirmed once the
+  account nonce has moved past it and it is gone from the mempool, says incoming
+  transfers need a node with `addrindex = true`, and falls back to the relay floor for
+  fees. A test runs the model against a mock shaped like upstream's node.
 - A separation test, like `node_separation.rs`: the node's and the wallet's lock files
   contain no egui.
 
@@ -245,6 +254,11 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 ### Phase 6. Release — 2 days
 
 - Builds for Windows and Linux; a portable archive like the miner kit.
+- An Android miner built against Android's own libc (`aarch64-linux-android`, with the
+  NDK), so it resolves host names; the static musl build from
+  `scripts/build-android-static.sh` works but needs the pool as an IP address. Android
+  also takes big cores offline under load or heat, and pinning to an offline core fails;
+  the miner then leaves that worker unpinned, which is right, but could re-pin later.
 - Release builds with `PLAINE_REQUIRE_BUILD_ID=1` — the mechanism in `build.rs` already
   exists: a binary that cannot name its commit is not built.
 - `SHA256SUMS` with every release.
@@ -269,7 +283,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 | # | question | recommendation |
 |---|---|---|
 | 1 | GUI framework | egui/eframe — decided: testable through kittest, one binary, no WebView |
-| 2 | KDF v2 on argon2id | yes if a new wallet dependency is acceptable; otherwise strong generated passphrases in the GUI |
+| 2 | KDF v2 on argon2id | decided: yes, with the library in `wallet-gui/` rather than the wallet crate; older key files keep opening |
 | 3 | Stratum on `127.0.0.1` by default | decided: changed in the fork, called out in `CHANGELOG.md` and `FORK.md` |
 | 4 | GUI licence | MIT, as upstream |
 | 5 | UI languages | English first; translations as separate resource files |
@@ -337,8 +351,41 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   after a restart, a note's `time`, `chainwork` below the tip.
   1.5 done: `fee_suggest` reads the transfer fees of the last 240 blocks, cached per tip;
   checked by unit tests and by the transfer end-to-end run.
-- [ ] Phase 2
-- [ ] Phase 3
-- [ ] Phase 4
-- [ ] Phase 5
+- [x] **Phase 2** — done. 2.1: `plaine_wallet::api` creates, imports, opens, signs, backs
+  up and re-wraps keys without printing, and returns advice as `Notice`s; the CLI runs
+  on it with unchanged output (its 141 tests pass as before). 2.2: `kdf: argon2id-v1`
+  (64 MiB, one lane, three passes by default). Upstream's structure test allows the
+  wallet no KDF library, so `plaine-wallet` knows the format and takes the algorithm as
+  a function a program installs at start-up; `wallet-gui/` links argon2 and installs it
+  in the desktop wallet and in `plaine-wallet-cli`. The node never compiles it. 2.3:
+  argon2id matches the reference implementation's vector; key files written by
+  upstream's wallet (`kdf: none` and `blake3-iter-v1`, kept as fixtures) open unchanged
+  and move to argon2id with the same address; a relabelled or cheapened file is caught
+  by the MAC. The owner's mining key (`kdf: none`) was checked to open with both builds.
+- [ ] Phase 3 — in progress. The first version runs: start (open, create with argon2id,
+  restore from backup), unlock, Home, Send with a confirmation screen, History with
+  paging and the upstream-node fallback, Settings (node, token, auto-lock, a protected
+  copy of the key, the backup behind the passphrase). Node calls run on a worker thread.
+  21 headless tests (`egui_kittest`) and model tests, a separation test for the lock
+  file. Checked by hand against a synced indexing node: the owner's address shows its
+  14 incoming pool payouts. Still to do: QR code, the end-to-end run against a real
+  node (phase 4), and a visual pass the owner asked for after seeing the first version:
+  layout, typography, colours, a proper history table.
+- [x] **Phase 4** — done. The main scenario runs through the GUI against a real
+  `plaine-noded` and `plaine-miner` (`wallet-gui/tests/e2e.rs`, under `check.sh --e2e`):
+  keys A and B created on the first-run screen, A mined past maturity, A sends to B on
+  the send screen, B sees the balance and an incoming entry, A an outgoing one, and the
+  balances equal `emission_audit`'s issued total. 234 s here. Failures are covered with
+  a node in memory and a real socket: bad address, amount above the spendable balance,
+  wrong passphrase, weak passphrase, a node that is down, a transfer the node refuses
+  (a reused nonce among them). Measurement 0.5: mining 62 blocks on a fresh chain with
+  all but two cores takes 2.5-3.5 minutes on a Ryzen 7 8745HS.
+- [x] **Phase 5** — done. 5.3: the topology reader builds for Android, splits
+  big.LITTLE cores by `cpu_capacity`, and pinning takes the big cores first; checked with
+  a Snapdragon 732G layout and `cargo check --target aarch64-linux-android`. 5.4 done:
+  `--status-format json`, one object per line (status, share, block, summary), checked
+  against a live node. 5.1 and 5.2 need nothing more (PRs stay as they are; measurements
+  are in `FORK.md`). 5.5 done: the Mining tab starts and stops `plaine-miner` with a
+  Background or Maximum profile and shows its JSON status. 5.6 done: end to end, the tab
+  mines to the wallet on a real node and shows accepted shares (`wallet-gui/tests/e2e.rs`).
 - [ ] Phase 6

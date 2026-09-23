@@ -12,10 +12,18 @@ description = "Desktop wallet for Plaine. Signs with plaine-wallet's code; talks
 name = "plaine-wallet-gui"
 path = "src/main.rs"
 
+[[bin]]
+name = "plaine-wallet-cli"
+path = "src/bin/plaine-wallet-cli.rs"
+
 [dependencies]
 plaine-wallet = { path = "../wallet" }
 plaine-consensus = { path = "../lib/consensus" }
+serde_json = "1"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "accesskit"] }
+# The memory-hard KDF for key files (kdf: argon2id-v1). It lives here, not in
+# plaine-wallet, whose dependency policy admits no KDF library; see src/kdf.rs.
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 egui_kittest = "0.36"

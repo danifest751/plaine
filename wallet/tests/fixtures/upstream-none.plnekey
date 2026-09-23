@@ -1,0 +1,13 @@
+PLNEKEY1
+version: 1
+role: spend
+created: 1790167525
+kdf: none
+kdf_iters: 0
+kdf_salt: 6ad2bd2c57308716cc0c0235dc0ae22f9f22bac1977c051434c64121d2c0c6d7
+cipher: none
+nonce: 7594ca6c53f311e90553e2f0d14f3dac
+pubkey: 50bffc732c9c4f19ca78b044ff0839764e8e1fd36c6a300374689597587b864a
+address: plne1ned7pg9p8wk3jdu69m5g7yt39yc4s6ye8zgdk9
+ciphertext: 02716da46ebbd89a18e033566cd4a5564e26745fe2e76d760d39cf34ace21ea9
+mac: f61c89b80fe590f6cef50cd76dd8fe1d9f9b056d91fe81e35b4c1f63432bbe1b

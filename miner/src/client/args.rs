@@ -82,6 +82,7 @@ pub struct Partial {
     pub bench_secs: Option<u64>,
     pub batch: Option<usize>,
     pub no_pin: Option<bool>,
+    pub status_format: Option<super::status::Format>,
     pub print_topology: Option<bool>,
     pub grind: Option<String>,
     pub config: Option<String>,
@@ -109,6 +110,7 @@ impl Partial {
             bench_secs: self.bench_secs.or(lower.bench_secs),
             batch: self.batch.or(lower.batch),
             no_pin: self.no_pin.or(lower.no_pin),
+            status_format: self.status_format.or(lower.status_format),
             print_topology: self.print_topology.or(lower.print_topology),
             grind: self.grind.or(lower.grind),
             config: self.config.or(lower.config),
@@ -183,6 +185,9 @@ fn resolve(
     }
     if let Some(v) = p.status_secs {
         client.status_secs = v;
+    }
+    if let Some(v) = p.status_format {
+        client.status_format = v;
     }
     if let Some(v) = p.max_shares {
         client.max_shares = v;
@@ -321,6 +326,10 @@ fn parse_argv(argv: &[String]) -> Result<Partial, String> {
                 )?);
             }
             "--no-pin" => p.no_pin = Some(true),
+            "--status-format" => {
+                let v = value("text or json")?;
+                p.status_format = Some(super::status::Format::parse(&v)?);
+            }
             "--huge-pages" => p.pages = Some(Ask::Force),
             "--no-huge-pages" => p.pages = Some(Ask::Never),
             "--print-topology" => p.print_topology = Some(true),
@@ -411,6 +420,7 @@ fn from_config(pairs: &[(String, conf::Value)]) -> Result<Partial, String> {
             "threads" => p.threads = Some(num(u32::MAX as u64)? as usize),
             "batch" => p.batch = Some(batch::check(num(u32::MAX as u64)? as usize)?),
             "no-pin" => p.no_pin = Some(boolean()?),
+            "status-format" => p.status_format = Some(super::status::Format::parse(&text()?)?),
             "cpu-affinity" => {
                 p.cpus = Some(match value {
                     Value::Str(s) => parse_cpu_list(s)?,
@@ -755,6 +765,19 @@ mod tests {
         assert!(o.no_pin);
         let e = with_config(r#"{"no-pin": "yes"}"#, &[]).unwrap_err();
         assert!(e.contains("true or false"), "{e}");
+    }
+
+    #[test]
+    fn the_status_format_comes_from_the_flag_or_the_config() {
+        use crate::client::status::Format;
+        assert_eq!(args(&["plne1abc"]).unwrap().client.status_format, Format::Text);
+        let o = args(&["plne1abc", "--status-format", "json"]).unwrap();
+        assert_eq!(o.client.status_format, Format::Json);
+        assert!(args(&["plne1abc", "--status-format", "yaml"]).is_err());
+        let o = with_config(r#"{"address": "plne1file", "status-format": "json"}"#, &[]).unwrap();
+        assert_eq!(o.client.status_format, Format::Json);
+        let o = with_config(r#"{"status-format": "json"}"#, &["plne1x", "--status-format", "text"]).unwrap();
+        assert_eq!(o.client.status_format, Format::Text, "the command line wins over the file");
     }
 
     #[test]

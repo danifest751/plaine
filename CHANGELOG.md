@@ -7,6 +7,42 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Miner on Android phones: `scripts/build-android-static.sh` builds a static arm64
+  binary without the NDK. Tested on a Poco X3 Pro against rplant.xyz: 4.8-5.0 kH/s,
+  shares accepted. Cores are classed per `cpu_capacity` level, so a phone with little,
+  big and prime clusters pins to prime, then big, then little.
+- Desktop wallet: a Mining tab. It runs `plaine-miner` paying to the wallet's address, in
+  a Background (half the cores, idle priority) or Maximum profile, and shows the hash
+  rate, shares, blocks and height from the miner's JSON status. It keeps mining while the
+  wallet is locked and stops when the wallet closes.
+- Miner: `--status-format json` (and `"status-format"` in the config file) writes one JSON
+  object per line on stdout: `status` every `--status` seconds, `share`, `block` and a
+  final `summary`. Errors stay on stderr as text.
+- Miner: the processor topology is read on Android as on Linux; phones' big.LITTLE cores
+  are classed by `cpu_capacity` and pinning takes the fastest class first.
+- Desktop wallet: an end-to-end test through the GUI against a real node and miner (two
+  keys, a matured coinbase, a transfer on the send screen, both histories, balances
+  against `emission_audit`), a Refresh button, and a test for a node that is down.
+- Desktop wallet, `wallet-gui/`: open, create (argon2id) or restore a key; balance and
+  node state; send with a confirmation screen, the fee from `fee_suggest` and the nonce
+  from `pendingNonce`; history with paging; settings for the node, the RPC token and
+  auto-lock; a protected copy of an unencrypted key; the backup string behind the
+  passphrase, wiped from the clipboard after 60 seconds. With a node that has no address
+  history (upstream's, or one without `addrindex`), it lists its own sends from a log
+  beside the key file.
+- Wallet: key files can be sealed under `kdf: argon2id-v1` (64 MiB, one lane, three
+  passes by default), a memory-hard KDF, instead of `blake3-iter-v1`, which is not.
+  `--kdf argon2id` on `new`, `import` and `passphrase`. The algorithm is installed by the
+  program: `plaine-wallet-cli` and the desktop wallet, both in `wallet-gui/`, have it;
+  the plain `plaine-wallet` keeps upstream's dependency policy and refuses such files by
+  name. Every existing key file opens as before; `kdf: none` and `blake3-iter-v1` files
+  written by upstream's wallet are kept as test fixtures and opened on every run.
+- Wallet: `plaine_wallet::api`, the wallet as a library for the desktop wallet: create,
+  import and open a key, sign a transfer, print the backup string, change the
+  passphrase, parse amounts and check addresses, with nothing written to a terminal.
+  Advice the CLI prints comes back as `Notice` values. The CLI now runs on it; its output
+  is unchanged. One difference: `transfer` now checks that the decrypted seed reproduces
+  the key file's public key before signing, as `verify` always did.
 - `docs/rpc.md`: a reference for all 19 RPC methods: transport rules, parameters, result
   fields, errors and examples, checked against a running node. `lib/rpc/tests/reference_doc.rs`
   fails when the method list and the reference drift apart.
@@ -44,6 +80,10 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Fixed
 
+- Miner on aarch64: the JIT's instruction-cache flush called `__clear_cache`, which only
+  a C runtime (libgcc or compiler-rt) provides, so a static build without one did not
+  link. The miner now does the flush itself: the same `dc cvau` / `ic ivau` sequence,
+  line sizes from `CTR_EL0`.
 - Node: `fee_suggest` sampled no blocks and returned the relay floor as every percentile.
   It now takes nearest-rank percentiles of the transfer fees in the last 240 blocks (the
   window SPEC §14 names), never below the relay floor, computed once per tip.
