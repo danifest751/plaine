@@ -83,7 +83,6 @@ fn measure(b: &Bench, topo: &Topology) -> Result<Summary, String> {
         let phase = phase.clone();
         let counters = counters.clone();
         let ask = b.pages;
-        let batch = batch;
         handles.push(
             std::thread::Builder::new()
                 .name(format!("plaine-bench-{i}"))
