@@ -478,6 +478,14 @@ pub trait ChainView: Send + Sync {
         let _ = (addr, before, limit);
         HistoryLookup::NotIndexed
     }
+
+    /// `txid` looked for among the confirmed transactions touching `addr`, through
+    /// the address index: how a node without `txindex` finds a wallet's own older
+    /// transactions. `None` when the node keeps no address index.
+    fn tx_via_history(&self, txid: &Hash32, addr: &Address20) -> Option<TxLookup> {
+        let _ = (txid, addr);
+        None
+    }
 }
 
 pub trait MempoolView: Send + Sync {

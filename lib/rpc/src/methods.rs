@@ -425,9 +425,46 @@ fn tx_send_raw(node: &Node, params: &Json) -> Result<Json, RpcError> {
 }
 
 fn tx_get(node: &Node, params: &Json) -> Result<Json, RpcError> {
-    arity(params, 1, "tx_get")?;
+    arity(params, 2, "tx_get")?;
     let txid = hash_param(params, 0, "txid")?;
-    match node.chain.tx(&txid) {
+    let via = match param(params, 1, "address") {
+        None | Some(Json::Null) => None,
+        Some(_) => Some(address_param(node, params, 1, "address")?),
+    };
+    let lookup = node.chain.tx(&txid);
+
+    // Without a txid index, an address the transaction touches lets the address
+    // index answer instead: how a wallet follows its own transactions.
+    if let (TxLookup::NotIndexed { .. }, Some(addr)) = (&lookup, via) {
+        return match node.chain.tx_via_history(&txid, &addr) {
+            Some(TxLookup::Found(t)) => Ok(tx_json(&t)),
+            Some(TxLookup::Absent) => Err(RpcError::detail(
+                ErrorCode::NotFound,
+                "no transaction with that id is in the mempool or among the confirmed \
+                 transactions that touch that address",
+            )),
+            Some(TxLookup::NotIndexed { indexed_from }) => Err(RpcError::detail(
+                ErrorCode::FeatureDisabled,
+                format!(
+                    "not in the mempool, and not among the transactions that touch that \
+                     address from height {} on, which is as far back as this node can see - \
+                     it cannot say whether it exists below that. Resync with \
+                     `addrindex = true`, or `txindex = true`, to cover the whole chain.",
+                    indexed_from.unwrap_or(0)
+                ),
+            )),
+            None => Err(RpcError::detail(
+                ErrorCode::FeatureDisabled,
+                "not in the mempool or the recent blocks this node keeps at hand, and this \
+                 node keeps neither a txid index nor an address index to look further. \
+                 Start it with `addrindex = true` to find transactions by an address they \
+                 touch, or `txindex = true` to find any by id; either then needs a resync \
+                 to cover past blocks.",
+            )),
+        };
+    }
+
+    match lookup {
         TxLookup::Found(t) => Ok(tx_json(&t)),
 
         TxLookup::Absent => {
@@ -437,7 +474,9 @@ fn tx_get(node: &Node, params: &Json) -> Result<Json, RpcError> {
             ErrorCode::FeatureDisabled,
             "not in the mempool, and this node has no txid index, so confirmed \
              transactions cannot be looked up by id. Start with `txindex = true` \
-             - it must then resync to build the index.",
+             - it must then resync to build the index. With `addrindex = true`, \
+             passing an address the transaction touches as the second parameter \
+             works too.",
         )),
 
         TxLookup::NotIndexed { indexed_from: Some(from) } => Err(RpcError::detail(
@@ -1817,6 +1856,62 @@ mod tests {
         assert!(detail.contains("no transaction with that id"), "{detail}");
 
         assert!(!detail.contains("txindex"), "{detail}");
+    }
+
+    fn txid_param(byte: u8) -> Json {
+        Json::str(plaine_consensus::hex::encode(&[byte; 32]))
+    }
+
+    #[test]
+    fn tx_get_finds_a_confirmed_tx_through_the_address_index() {
+        let node = MockNode::synced()
+            .with_history(0, vec![history_entry(7, 1, HistoryKind::Transfer, Direction::Out)])
+            .into_node();
+        let v = call(&node, "tx_get", Json::Arr(vec![txid_param(7), history_address()])).unwrap();
+        let text = v.to_string();
+        assert!(text.contains(r#""where":"block""#), "{text}");
+        assert!(text.contains(r#""height":7"#), "{text}");
+        assert!(text.contains(&"07".repeat(32)), "{text}");
+    }
+
+    #[test]
+    fn tx_get_through_the_address_index_says_what_it_searched() {
+        let full = MockNode::synced()
+            .with_history(0, vec![history_entry(7, 1, HistoryKind::Transfer, Direction::Out)])
+            .into_node();
+        let e = call(&full, "tx_get", Json::Arr(vec![txid_param(8), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound, "an index from genesis can say no");
+        assert!(e.detail.unwrap().contains("touch that address"));
+
+        let late = MockNode::synced()
+            .with_history(500, vec![history_entry(700, 0, HistoryKind::Transfer, Direction::In)])
+            .into_node();
+        let e = call(&late, "tx_get", Json::Arr(vec![txid_param(8), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::FeatureDisabled, "an index from 500 cannot say no");
+        let d = e.detail.unwrap();
+        assert!(d.contains("from height 500"), "{d}");
+    }
+
+    #[test]
+    fn tx_get_with_an_address_but_no_index_names_both_switches() {
+        let node = MockNode::synced().into_node();
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::FeatureDisabled);
+        let d = e.detail.unwrap();
+        assert!(d.contains("addrindex = true") && d.contains("txindex = true"), "{d}");
+    }
+
+    #[test]
+    fn tx_get_prefers_the_txid_index_and_checks_the_address() {
+        // With txindex the answer is the txid index's; the address is still
+        // validated, so a typo is reported rather than silently ignored.
+        let node = MockNode::synced().with_txindex().into_node();
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), history_address()])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound);
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), Json::str("plne1nope")])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidParams);
+        let e = call(&node, "tx_get", Json::Arr(vec![txid_param(7), Json::Null, Json::Null])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidParams, "at most two parameters");
     }
 
     #[test]
