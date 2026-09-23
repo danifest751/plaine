@@ -49,8 +49,15 @@ in [CHANGELOG.md](CHANGELOG.md).
 - The W^X batch is sized to the machine's L2 (`--batch N` to override), and workers are
   pinned one per core before any SMT sibling (`--no-pin` to opt out), fastest core class
   first.
-- Android: the processor topology is read as on Linux, and big.LITTLE cores are told
-  apart by `cpu_capacity`, so a phone's big cores are used first.
+- Android: the processor topology is read as on Linux, and cores get one class per
+  `cpu_capacity` level (little, big, prime), so a phone's fastest cores are used first.
+  `scripts/build-android-static.sh` builds a static arm64 binary without the NDK; the
+  JIT's instruction-cache flush is done in the miner itself, so it needs no C runtime.
+  On a Poco X3 Pro (Snapdragon 860, Android 12) it passes the JIT self-check, benches
+  3.85 kH/s on 6 threads, and mined to rplant.xyz at 4.8-5.0 kH/s with 7 of 8 shares
+  accepted (the one refused was stale, after the pool went silent and the miner
+  reconnected). Such a static build cannot resolve host names on Android, which has no
+  `/etc/resolv.conf`: give the pool as an IP address.
 - `--status-format json`: one JSON object per line on stdout (status, share, block,
   summary) for a program to read; the desktop wallet's Mining tab uses it.
 
