@@ -7,6 +7,13 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Desktop wallet, `wallet-gui/`: open, create (argon2id) or restore a key; balance and
+  node state; send with a confirmation screen, the fee from `fee_suggest` and the nonce
+  from `pendingNonce`; history with paging; settings for the node, the RPC token and
+  auto-lock; a protected copy of an unencrypted key; the backup string behind the
+  passphrase, wiped from the clipboard after 60 seconds. With a node that has no address
+  history (upstream's, or one without `addrindex`), it lists its own sends from a log
+  beside the key file.
 - Wallet: key files can be sealed under `kdf: argon2id-v1` (64 MiB, one lane, three
   passes by default), a memory-hard KDF, instead of `blake3-iter-v1`, which is not.
   `--kdf argon2id` on `new`, `import` and `passphrase`. The algorithm is installed by the
