@@ -38,6 +38,11 @@ CPU - which processors, not just how many\n\
 \x20                        combined with --threads. Pinning takes effect on Linux\n\
 \x20                        and Windows; macOS has no affinity API and the log\n\
 \x20                        says so.\n\
+\x20 --no-pin               Let the OS place the workers. By default they are\n\
+\x20                        pinned, one per core first, because a worker's 64 KiB\n\
+\x20                        pad lives in its core's private L2 and a thread the\n\
+\x20                        scheduler moves leaves its pad behind: 25.0 kH/s pinned\n\
+\x20                        against 23.3-23.7 unpinned on a Ryzen 7 8745HS.\n\
 \x20 --batch <N>            Nonces per W^X seal, 1..{}. Default: as many 64 KiB\n\
 \x20                        pads as half this thread's L2 share will hold, because\n\
 \x20                        every pad in a batch is filled before the first one\n\
@@ -109,6 +114,7 @@ EXAMPLES\n\
 \x20 plaine-miner --bench --bench-seconds 30\n\
 \x20 plaine-miner --bench --cpu-affinity 0,2,4,6      one thread per core\n\
 \x20 plaine-miner --bench --batch 4                   a smaller W^X batch\n\
+\x20 plaine-miner plne1you.rig1 --no-pin              let the OS place workers\n\
 \x20 plaine-miner plne1you.rig1@pool.example:9258 --cpu-priority 1\n\
 \x20 plaine-miner --config ~/.plaine/miner.json\n",
         env!("CARGO_PKG_VERSION"),
@@ -170,6 +176,15 @@ fn main() -> std::process::ExitCode {
         }
 
         opts.client.pins = Some(cpu::resolve_pins(&list, &machine));
+    } else if !opts.no_pin {
+        // Default to pinning. An unpinned worker's pad is dragged between L2s every time
+        // the scheduler moves it; measured at 23.3-23.7 kH/s unpinned against 25.0 pinned
+        // on this machine. --no-pin restores the upstream behaviour.
+        let list: Vec<usize> = machine.spread().into_iter().take(opts.client.threads).collect();
+        if !list.is_empty() {
+            opts.client.pins = Some(cpu::resolve_pins(&list, &machine));
+            opts.cpus = Some(list);
+        }
     }
     for n in &notes {
         eprintln!("plaine-miner: {n}");

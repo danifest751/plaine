@@ -43,6 +43,8 @@ pub struct Options {
     pub config_path: Option<String>,
     /// An explicit --batch N. None means the machine decides; see `args::batch`.
     pub batch: Option<usize>,
+    /// --no-pin: keep the upstream behaviour of letting the OS place the workers.
+    pub no_pin: bool,
 }
 
 impl Default for Options {
@@ -56,6 +58,7 @@ impl Default for Options {
             bench_secs: DEFAULT_BENCH_SECS,
             config_path: None,
             batch: None,
+            no_pin: false,
         }
     }
 }
@@ -78,6 +81,7 @@ pub struct Partial {
     pub bench: Option<bool>,
     pub bench_secs: Option<u64>,
     pub batch: Option<usize>,
+    pub no_pin: Option<bool>,
     pub print_topology: Option<bool>,
     pub grind: Option<String>,
     pub config: Option<String>,
@@ -104,6 +108,7 @@ impl Partial {
             bench: self.bench.or(lower.bench),
             bench_secs: self.bench_secs.or(lower.bench_secs),
             batch: self.batch.or(lower.batch),
+            no_pin: self.no_pin.or(lower.no_pin),
             print_topology: self.print_topology.or(lower.print_topology),
             grind: self.grind.or(lower.grind),
             config: self.config.or(lower.config),
@@ -250,6 +255,7 @@ fn resolve(
         bench_secs,
         config_path,
         batch: p.batch,
+        no_pin: p.no_pin.unwrap_or(false),
     })
 }
 
@@ -312,6 +318,7 @@ fn parse_argv(argv: &[String]) -> Result<Partial, String> {
                     int(&v, "--batch needs a positive integer")? as usize,
                 )?);
             }
+            "--no-pin" => p.no_pin = Some(true),
             "--huge-pages" => p.pages = Some(Ask::Force),
             "--no-huge-pages" => p.pages = Some(Ask::Never),
             "--print-topology" => p.print_topology = Some(true),
@@ -401,6 +408,7 @@ fn from_config(pairs: &[(String, conf::Value)]) -> Result<Partial, String> {
             "stratum" => p.stratum = Some(text()?),
             "threads" => p.threads = Some(num(u32::MAX as u64)? as usize),
             "batch" => p.batch = Some(batch::check(num(u32::MAX as u64)? as usize)?),
+            "no-pin" => p.no_pin = Some(boolean()?),
             "cpu-affinity" => {
                 p.cpus = Some(match value {
                     Value::Str(s) => parse_cpu_list(s)?,
@@ -731,6 +739,20 @@ mod tests {
         assert_eq!(d.client.status_secs, 10);
         assert!(d.client.reconnect);
         assert_eq!(d.client.stratum, "127.0.0.1:9258");
+    }
+
+    #[test]
+    fn pinning_is_the_default_and_no_pin_turns_it_off() {
+        assert!(!args(&["plne1abc"]).unwrap().no_pin, "pinning is on unless asked off");
+        assert!(args(&["plne1abc", "--no-pin"]).unwrap().no_pin);
+    }
+
+    #[test]
+    fn no_pin_is_accepted_from_the_config_file() {
+        let o = with_config(r#"{"address": "plne1file", "no-pin": true}"#, &[]).unwrap();
+        assert!(o.no_pin);
+        let e = with_config(r#"{"no-pin": "yes"}"#, &[]).unwrap_err();
+        assert!(e.contains("true or false"), "{e}");
     }
 
     #[test]
