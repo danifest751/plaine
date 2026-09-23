@@ -205,3 +205,11 @@ fn suggested_passphrases_are_long_and_different() {
     assert!(passphrase_problem("short", "short").is_some());
     assert!(passphrase_problem("long enough passphrase", "long enough passphrasf").is_some());
 }
+
+#[test]
+fn times_are_shown_in_utc_calendar_form() {
+    use plaine_wallet_gui::model::format_utc;
+    assert_eq!(format_utc(0), "1970-01-01 00:00");
+    assert_eq!(format_utc(951_782_400), "2000-02-29 00:00", "a leap day");
+    assert_eq!(format_utc(1_790_167_525), "2026-09-23 12:45");
+}

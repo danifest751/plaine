@@ -458,6 +458,8 @@ pub fn sent_status(r: &SentRecord, account: &Account, pending: &[String]) -> Sen
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub txid: String,
+    /// When: the block's time, or when this wallet sent it; empty if unknown.
+    pub when: String,
     /// "pending", or the confirmations.
     pub status: String,
     pub direction: String,
@@ -477,6 +479,7 @@ pub fn rows(view: &NodeView, sent: &[SentRecord]) -> Vec<Row> {
         .map(|txid| match sent.iter().find(|r| &r.txid == txid) {
             Some(r) => Row {
                 txid: txid.clone(),
+                when: format_utc(r.time),
                 status: "pending".into(),
                 direction: "out".into(),
                 kind: "transfer".into(),
@@ -485,6 +488,7 @@ pub fn rows(view: &NodeView, sent: &[SentRecord]) -> Vec<Row> {
             },
             None => Row {
                 txid: txid.clone(),
+                when: String::new(),
                 status: "pending".into(),
                 direction: "out".into(),
                 kind: "transfer".into(),
@@ -503,6 +507,7 @@ pub fn rows(view: &NodeView, sent: &[SentRecord]) -> Vec<Row> {
                 };
                 Row {
                     txid: e.txid.clone(),
+                    when: format_utc(e.time),
                     status: format!("{} conf.", e.confirmations),
                     direction: e.direction.clone(),
                     kind: e.kind.clone(),
@@ -521,6 +526,7 @@ pub fn rows(view: &NodeView, sent: &[SentRecord]) -> Vec<Row> {
                 own.sort_by_key(|r| std::cmp::Reverse(r.nonce));
                 out.extend(own.into_iter().map(|r| Row {
                     txid: r.txid.clone(),
+                    when: format_utc(r.time),
                     status: match sent_status(r, a, &view.pending) {
                         SentStatus::Confirmed => "confirmed".into(),
                         SentStatus::Pending => "pending".into(),
@@ -616,4 +622,25 @@ pub fn config_dir() -> PathBuf {
         Some(h) => PathBuf::from(h).join(".config").join("plaine"),
         None => PathBuf::from("."),
     }
+}
+
+/// Unix seconds as `YYYY-MM-DD HH:MM` UTC.
+pub fn format_utc(secs: u64) -> String {
+    // Howard Hinnant's days-to-civil, for the proleptic Gregorian calendar.
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}",
+        rem / 3_600,
+        rem % 3_600 / 60
+    )
 }

@@ -651,10 +651,23 @@ fn history_tab(ui: &mut egui::Ui, s: &mut Session, view: &NodeView) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new("history")
             .striped(true)
-            .num_columns(4)
+            .num_columns(5)
             .show(ui, |ui| {
+                if !rows.is_empty() {
+                    for h in [
+                        "Status",
+                        "Time (UTC)",
+                        "Type",
+                        "Amount, PLNE",
+                        "Counterparty",
+                    ] {
+                        ui.label(RichText::new(h).underline());
+                    }
+                    ui.end_row();
+                }
                 for r in &rows {
                     ui.label(&r.status);
+                    ui.label(&r.when);
                     ui.label(format!("{} {}", r.kind, r.direction));
                     ui.label(&r.amount);
                     ui.monospace(if r.counterparty.is_empty() {
