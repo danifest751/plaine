@@ -39,7 +39,7 @@ pub fn write_config(dir: &Path, data: &Path, p2p: u16, rpc: u16, stratum: u16, s
         )
     };
     let text = format!(
-        "[node]\nnetwork = \"main\"\ndata_dir = {:?}\n\n[p2p]\nlisten = \"127.0.0.1:{p2p}\"\n{seeds}\n\
+        "[node]\nnetwork = \"main\"\ndata_dir = {:?}\n\n[p2p]\nlisten = \"127.0.0.1:{p2p}\"\nuse_embedded_seeds = false\n{seeds}\n\
          [rpc]\nlisten = \"127.0.0.1:{rpc}\"\n\n[stratum]\nlisten = \"127.0.0.1:{stratum}\"\n",
         data.display().to_string().replace('\\', "/")
     );
