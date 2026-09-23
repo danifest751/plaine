@@ -9,3 +9,4 @@ pub mod kdf;
 pub mod mining;
 pub mod model;
 pub mod rpc;
+pub mod style;

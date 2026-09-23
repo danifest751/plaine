@@ -216,3 +216,12 @@ fn times_are_shown_in_utc_calendar_form() {
     assert_eq!(format_utc(951_782_400), "2000-02-29 00:00", "a leap day");
     assert_eq!(format_utc(1_790_167_525), "2026-09-23 12:45");
 }
+
+#[test]
+fn the_qr_codes_uppercase_address_is_still_a_valid_address() {
+    // The QR code carries the address in capitals (alphanumeric mode, a smaller
+    // code); whatever scans it must be able to paste it back.
+    let a = "plne10srlmaehj5mvh42gn7freevqjrkd8e8ervaet5";
+    assert!(plaine_wallet::api::check_address(&a.to_uppercase()).is_ok());
+    assert!(qrcode::QrCode::new(a.to_uppercase().as_bytes()).is_ok());
+}
