@@ -49,6 +49,10 @@ pub struct StoreConfig {
     pub prune: bool,
     pub body_retain_blocks: u64,
     pub txindex: bool,
+    // Record which transactions touch each address, for per-address history over
+    // RPC. Off by default, like txindex: it costs a body parse per block and a row
+    // per party.
+    pub addrindex: bool,
     pub page_cache_bytes: usize,
 
     // a hard cap, not a target. segment handles are an LRU, so open fds never
@@ -76,6 +80,7 @@ impl StoreConfig {
             prune: true,
             body_retain_blocks: BLOCKS_PER_YEAR,
             txindex: false,
+            addrindex: false,
             page_cache_bytes: MemoryBudget::default().page_cache_bytes,
             reader_fd_cap: 64,
             // State checkpoints are redb persistent savepoints, and each one pins

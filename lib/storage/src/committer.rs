@@ -314,7 +314,7 @@ impl Committer {
                 ));
             }
 
-            check_block_inputs(b)?;
+            check_block_inputs(b, self.cfg.addrindex)?;
             self.write_block(b).map_err(|e| self.poison(e))?;
             self.batch_blocks += 1;
             self.batch_bytes += (HEADER_BYTES + b.body.len() + crate::BODY_FRAME_BYTES) as u64;
@@ -330,7 +330,7 @@ impl Committer {
     }
 
     fn write_block(&mut self, b: &BlockToCommit<'_>) -> Result<(), StoreError> {
-        check_block_inputs(b)?;
+        check_block_inputs(b, self.cfg.addrindex)?;
         let seg = layout::seg_of(b.height);
         let rolled = self.hdr.as_ref().map(|(s, _)| *s) != Some(seg);
         self.ensure_segments(seg)?;
@@ -357,6 +357,7 @@ impl Committer {
             &self.inner,
             b,
             self.cfg.txindex,
+            self.cfg.addrindex,
             &mut self.undo_buf,
         );
         self.txn = Some(txn);
@@ -521,6 +522,7 @@ impl Committer {
             issued: self.meta.issued,
             fingerprint: self.meta.fingerprint,
             txindex_from: self.meta.txindex_from,
+            addrindex_from: self.meta.addrindex_from,
             hash_index_full_rows: self.meta.hash_index_full_rows,
             hdr_damaged: !self.damage.header.is_empty(),
             body_damaged: !self.damage.body.is_empty(),
@@ -616,7 +618,7 @@ impl Committer {
             if b.height != plan.fork_height + 1 + i as u64 {
                 return Err(StoreError::BadPlan("apply heights must be contiguous ascending"));
             }
-            check_block_inputs(b)?;
+            check_block_inputs(b, self.cfg.addrindex)?;
         }
 
         let mut old_hashes: Vec<(u64, [u8; 32])> = Vec::with_capacity(plan.rollback.len());
@@ -914,7 +916,7 @@ impl Committer {
         self.cont = self.rebuild_cont(fork_height + 1)?;
 
         for b in apply {
-            check_block_inputs(b)?;
+            check_block_inputs(b, self.cfg.addrindex)?;
             let seg = layout::seg_of(b.height);
             let rolled = self.hdr.as_ref().map(|(s, _)| *s) != Some(seg);
             self.ensure_segments(seg)?;
@@ -928,6 +930,7 @@ impl Committer {
                 &self.inner,
                 b,
                 self.cfg.txindex,
+                self.cfg.addrindex,
                 &mut self.undo_buf,
             )?;
         }
@@ -1442,7 +1445,7 @@ impl Committer {
     }
 }
 
-fn check_block_inputs(b: &BlockToCommit<'_>) -> Result<(), StoreError> {
+fn check_block_inputs(b: &BlockToCommit<'_>, addrindex: bool) -> Result<(), StoreError> {
     debug_assert_eq!(
         header_hash(b.header),
         b.hash,
@@ -1465,6 +1468,13 @@ fn check_block_inputs(b: &BlockToCommit<'_>) -> Result<(), StoreError> {
             "body must be non-empty: len == 0 is the sidecar's absent sentinel",
         ));
     }
+    // With the address index on, the body is parsed during apply. Refuse it here,
+    // before anything is written, rather than halfway through a block's rows.
+    if addrindex && plaine_consensus::codec::BlockBody::parse(b.body).is_err() {
+        return Err(StoreError::BadPlan(
+            "body does not parse, so its addresses cannot be indexed",
+        ));
+    }
     Ok(())
 }
 
@@ -1474,6 +1484,7 @@ fn apply_block(
     inner: &ReaderInner,
     b: &BlockToCommit<'_>,
     txindex: bool,
+    addrindex: bool,
     undo_buf: &mut Vec<u8>,
 ) -> Result<(), StoreError> {
     let prefix_bytes = inner.prefix_bytes;
@@ -1564,6 +1575,12 @@ fn apply_block(
             }
         }
     }
+    if addrindex {
+        index_addresses(txn, b)?;
+        if meta.addrindex_from.is_none() {
+            meta.addrindex_from = Some(b.height);
+        }
+    }
     meta.issued = meta.issued.saturating_add(b.issued_delta);
     meta.tip = TipRef {
         hash: b.hash,
@@ -1573,6 +1590,35 @@ fn apply_block(
     meta.hdr_watermark = b.height + 1;
     meta.body_watermark = b.height + 1;
     meta.undo_floor = (b.height + 1).saturating_sub(UNDO_RING);
+    Ok(())
+}
+
+// One row per (party, block position). A transfer to oneself is one row, since
+// both parties give the same key. Rows are not removed on rollback: a reorg
+// replaces the body at a height, and readers check every hit against the body
+// that is canonical now, exactly as txindex lookups do.
+fn index_addresses(txn: &redb::WriteTransaction, b: &BlockToCommit<'_>) -> Result<(), StoreError> {
+    use plaine_consensus::codec::{BlockBody, Tx};
+    use plaine_consensus::crypto::address_payload;
+
+    let body = BlockBody::parse(b.body)
+        .map_err(|_| StoreError::BadPlan("body does not parse, so its addresses cannot be indexed"))?;
+    let mut t = txn.open_table(ADDRINDEX)?;
+    for i in 0..body.len() {
+        let index = u16::try_from(i)
+            .map_err(|_| StoreError::BadPlan("more than 65535 transactions in one block"))?;
+        let parties = match body.decode_tx(i) {
+            Some(Ok(Tx::Coinbase(cb))) => [Some(cb.to), None],
+            Some(Ok(Tx::Transfer(tx))) => [Some(address_payload(&tx.from_pub)), Some(tx.to)],
+            Some(Ok(Tx::Announcement(a))) => [Some(address_payload(&a.from_pub)), None],
+            // A type this build does not know is length-delimited in the body and
+            // skipped, as everywhere else in the node.
+            _ => [None, None],
+        };
+        for addr in parties.into_iter().flatten() {
+            t.insert(&codec::addr_key(&addr, b.height, index), ())?;
+        }
+    }
     Ok(())
 }
 

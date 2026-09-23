@@ -9,7 +9,7 @@ use plaine_consensus::constants::{HEADER_BYTES, MAX_HEADERS_PER_MSG};
 use plaine_consensus::crypto::header_hash;
 
 use crate::codec;
-use crate::error::{StoreError, TxLocation};
+use crate::error::{AddrHistory, AddrHit, StoreError, TxLocation};
 use crate::anchor;
 use crate::integrity::{
     BodyVouch, DamageKind, DamageSet, DamagedRange, RangeAvailability, SegmentKind,
@@ -29,6 +29,7 @@ pub(crate) struct Horizons {
     pub issued: u128,
     pub fingerprint: [u8; 32],
     pub txindex_from: Option<u64>,
+    pub addrindex_from: Option<u64>,
     pub hash_index_full_rows: u64,
     pub hdr_damaged: bool,
     pub body_damaged: bool,
@@ -829,6 +830,53 @@ impl StoreReader {
         Ok(v)
     }
 
+    pub fn addrindex_from(&self) -> Option<u64> {
+        self.horizons().addrindex_from
+    }
+
+    /// Positions of the transactions that touch `addr`, newest first, at most
+    /// `limit` of them, strictly older than `before` when it is given.
+    pub fn addr_history(
+        &self,
+        addr: &[u8; 20],
+        before: Option<(u64, u16)>,
+        limit: usize,
+    ) -> Result<AddrHistory, StoreError> {
+        let Some(from) = self.addrindex_from() else {
+            return Ok(AddrHistory::NotIndexed);
+        };
+        let txn = self.0.db.begin_read()?;
+        let t = match txn.open_table(crate::tables::ADDRINDEX) {
+            Ok(t) => t,
+            // A store created before this table existed gets it on the first
+            // indexed commit; until then there is simply nothing to read.
+            Err(redb::TableError::TableDoesNotExist(_)) => {
+                return Ok(AddrHistory::Page { indexed_from: from, hits: Vec::new(), more: false })
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let lo = codec::addr_key(addr, 0, 0);
+        let range = match before {
+            Some((h, i)) => t.range::<&[u8; 30]>(&lo..&codec::addr_key(addr, h, i))?,
+            None => t.range::<&[u8; 30]>(&lo..=&codec::addr_key(addr, u64::MAX, u16::MAX))?,
+        };
+        let mut hits = Vec::new();
+        let mut more = false;
+        for row in range.rev() {
+            let (k, _) = row?;
+            let (_, height, index) = codec::decode_addr_key(k.value());
+            if height < from {
+                break;
+            }
+            if hits.len() == limit {
+                more = true;
+                break;
+            }
+            hits.push(AddrHit { height, index });
+        }
+        Ok(AddrHistory::Page { indexed_from: from, hits, more })
+    }
+
     pub fn txindex_lookup(&self, txid: &[u8; 32]) -> Result<TxLocation, StoreError> {
         let Some(from) = self.txindex_from() else {
             return Ok(TxLocation::NotIndexed { indexed_from: u64::MAX });
@@ -919,6 +967,11 @@ impl StoreReader {
         foot!("invalid_seq", crate::tables::INVALID_SEQ);
         foot!("chainwork_ckpt", crate::tables::CHAINWORK_CKPT);
         foot!("txindex", crate::tables::TXINDEX);
+        // Absent on a store created before the table existed and not indexed since.
+        match txn.open_table(crate::tables::ADDRINDEX) {
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            _ => foot!("addrindex", crate::tables::ADDRINDEX),
+        }
         foot!("hdr_undo", crate::tables::HDR_UNDO);
         foot!("state_ckpt", crate::tables::STATE_CKPT);
 

@@ -24,6 +24,12 @@ pub const CHAINWORK_CKPT: TableDefinition<u64, &[u8; 32]> = TableDefinition::new
 
 pub const TXINDEX: TableDefinition<&[u8; 16], &[u8; 10]> = TableDefinition::new("txindex");
 
+// address (20) || height (8, big-endian) || tx index (2, big-endian). Big-endian so
+// one address's rows sort by position in the chain and a reverse range walk yields
+// its history newest first. Like TXINDEX, rows are never deleted on a reorg: a
+// reader checks each hit against the canonical body at that height.
+pub const ADDRINDEX: TableDefinition<&[u8; 30], ()> = TableDefinition::new("addrindex");
+
 pub const HDR_UNDO: TableDefinition<u64, &[u8]> = TableDefinition::new("hdr_undo");
 
 pub const STATE_CKPT: TableDefinition<u64, u64> = TableDefinition::new("state_ckpt");
