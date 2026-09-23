@@ -62,3 +62,6 @@ miner.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Release archives, built by scripts/package-release.sh.
+dist/

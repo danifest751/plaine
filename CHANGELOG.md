@@ -5,10 +5,24 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ## Unreleased
 
+## [1.0.0-fork.1] - 2026-09-23
+
+The fork's first release: builds for Windows, Linux and Android.
+
 ### Added
 
-- Miner on Android phones: `scripts/build-android-static.sh` builds a static arm64
-  binary without the NDK. Tested on a Poco X3 Pro against rplant.xyz: 4.8-5.0 kH/s,
+- Release: `scripts/package-release.sh` builds every binary from a clean checkout with
+  `PLAINE_REQUIRE_BUILD_ID=1` and packs a Windows archive (node, desktop wallet,
+  command-line wallets, miner, `start-node.bat`, `mine-pool.bat`, a `noded.toml` with the
+  address history on), static Linux binaries, the Android miner, and `SHA256SUMS`.
+- Documentation: `docs/USER_GUIDE.md` with screenshots from a demo chain; the README
+  rewritten for this fork.
+- Desktop wallet: `--config <file>` to keep its settings anywhere, a portable copy
+  beside the program among them; hash rates shown as kH/s.
+- Miner on Android phones: `scripts/build-android.sh` builds it with the NDK against
+  Android's libc, resolving host names like any Android program;
+  `scripts/build-android-static.sh` builds a static arm64 binary without the NDK, which
+  needs the pool as an IP address. Tested on a Poco X3 Pro against rplant.xyz: 4.8-5.0 kH/s,
   shares accepted. Cores are classed per `cpu_capacity` level, so a phone with little,
   big and prime clusters pins to prime, then big, then little.
 - Desktop wallet: a Mining tab. It runs `plaine-miner` paying to the wallet's address, in
@@ -72,6 +86,12 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Changed
 
+- Desktop wallet: it is a windowed program on Windows, without a console window beside it.
+- Desktop wallet: a visual pass. A navigation bar and a node status bar; screens as
+  cards in a centred column; a larger type scale and an accent colour, following the
+  system's light or dark theme; the spendable balance in large type; the address with a
+  QR code; the history as a table with incoming amounts in green and outgoing in red;
+  forms with labels above full-width fields.
 - Node: **the stratum server listens on `127.0.0.1:9258` by default**, not `0.0.0.0:9258`.
   A node started with no config no longer opens its mining server to every network it is
   on. Miners on other machines, or a pool front-end, need `[stratum] listen =

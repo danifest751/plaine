@@ -254,11 +254,10 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 ### Phase 6. Release — 2 days
 
 - Builds for Windows and Linux; a portable archive like the miner kit.
-- An Android miner built against Android's own libc (`aarch64-linux-android`, with the
-  NDK), so it resolves host names; the static musl build from
-  `scripts/build-android-static.sh` works but needs the pool as an IP address. Android
-  also takes big cores offline under load or heat, and pinning to an offline core fails;
-  the miner then leaves that worker unpinned, which is right, but could re-pin later.
+- Android: `scripts/build-android.sh` (NDK, resolves host names) is in place and tested
+  on a phone; the release ships its binary. Android takes big cores offline under load
+  or heat, and pinning to an offline core fails; the miner then leaves that worker
+  unpinned, which is right, but could re-pin once the core is back.
 - Release builds with `PLAINE_REQUIRE_BUILD_ID=1` — the mechanism in `build.rs` already
   exists: a binary that cannot name its commit is not built.
 - `SHA256SUMS` with every release.
@@ -368,9 +367,11 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   copy of the key, the backup behind the passphrase). Node calls run on a worker thread.
   21 headless tests (`egui_kittest`) and model tests, a separation test for the lock
   file. Checked by hand against a synced indexing node: the owner's address shows its
-  14 incoming pool payouts. Still to do: QR code, the end-to-end run against a real
-  node (phase 4), and a visual pass the owner asked for after seeing the first version:
-  layout, typography, colours, a proper history table.
+  14 incoming pool payouts. The end-to-end run came in phase 4. The visual pass the owner
+  asked for is done: type scale, spacing and an accent, a navigation bar and a node
+  status bar, content in a centred column of cards, a large balance, the address with a
+  QR code, a history table with incoming and outgoing amounts in colour. Checked on the
+  desktop against the owner's wallet.
 - [x] **Phase 4** — done. The main scenario runs through the GUI against a real
   `plaine-noded` and `plaine-miner` (`wallet-gui/tests/e2e.rs`, under `check.sh --e2e`):
   keys A and B created on the first-run screen, A mined past maturity, A sends to B on
@@ -388,4 +389,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   are in `FORK.md`). 5.5 done: the Mining tab starts and stops `plaine-miner` with a
   Background or Maximum profile and shows its JSON status. 5.6 done: end to end, the tab
   mines to the wallet on a real node and shows accepted shares (`wallet-gui/tests/e2e.rs`).
-- [ ] Phase 6
+- [x] **Phase 6** — done: release `v1.0.0-fork.1`. `scripts/package-release.sh` builds
+  the Windows archive, static Linux binaries (rust-lld, musl) and the Android miner (NDK)
+  from a clean checkout with `PLAINE_REQUIRE_BUILD_ID=1`, with `SHA256SUMS`;
+  `docs/USER_GUIDE.md` has screenshots from a demo chain; the README describes the fork.

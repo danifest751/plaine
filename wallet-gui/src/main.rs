@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
+// A window, not a console program: no black console box beside it on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use plaine_wallet_gui::app::WalletApp;
 use plaine_wallet_gui::model;
+use std::path::PathBuf;
 
 struct App(WalletApp);
 
@@ -13,13 +16,52 @@ impl eframe::App for App {
     }
 }
 
+const USAGE: &str = "\
+plaine-wallet-gui - the Plaine desktop wallet
+
+  plaine-wallet-gui [--config <file>]
+
+  --config <file>   settings file to use (created if missing). Default:
+                    %APPDATA%\\Plaine\\wallet-gui.conf on Windows,
+                    ~/.config/plaine/wallet-gui.conf elsewhere. A portable copy
+                    can keep its settings beside the program this way.
+";
+
+/// The settings file: `--config <file>`, else the default beside the node's data.
+fn settings_path() -> Result<PathBuf, String> {
+    let mut args = std::env::args().skip(1);
+    let mut path = None;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--config" => {
+                path = Some(PathBuf::from(
+                    args.next().ok_or("--config needs a file path")?,
+                ))
+            }
+            "--help" | "-h" => return Err(String::new()),
+            other => return Err(format!("unknown argument {other:?}")),
+        }
+    }
+    Ok(path.unwrap_or_else(|| model::config_dir().join("wallet-gui.conf")))
+}
+
 fn main() -> eframe::Result {
+    let settings = match settings_path() {
+        Ok(p) => p,
+        Err(e) => {
+            if !e.is_empty() {
+                eprintln!("plaine-wallet-gui: {e}");
+            }
+            eprint!("{USAGE}");
+            std::process::exit(if e.is_empty() { 0 } else { 2 });
+        }
+    };
     plaine_wallet_gui::kdf::install();
-    let settings = model::config_dir().join("wallet-gui.conf");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Plaine wallet")
-            .with_inner_size([760.0, 560.0]),
+            .with_inner_size([900.0, 760.0])
+            .with_min_inner_size([640.0, 480.0]),
         ..Default::default()
     };
     eframe::run_native(
