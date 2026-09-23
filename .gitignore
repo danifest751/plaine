@@ -35,6 +35,8 @@ passphrase*.txt
 # segment files reach gigabytes.
 # ---------------------------------------------------------------------------
 noded.toml
+# ...except the settings file the release archives ship.
+!scripts/release/noded.toml
 noded.lock
 peers.dat
 chain.redb
