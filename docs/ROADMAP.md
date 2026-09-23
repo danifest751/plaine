@@ -375,7 +375,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   wrong passphrase, weak passphrase, a node that is down, a transfer the node refuses
   (a reused nonce among them). Measurement 0.5: mining 62 blocks on a fresh chain with
   all but two cores takes 2.5-3.5 minutes on a Ryzen 7 8745HS.
-- [ ] Phase 5 — in progress. 5.3 done: the topology reader builds for Android, splits
+- [x] **Phase 5** — done. 5.3: the topology reader builds for Android, splits
   big.LITTLE cores by `cpu_capacity`, and pinning takes the big cores first; checked with
   a Snapdragon 732G layout and `cargo check --target aarch64-linux-android`. 5.4 done:
   `--status-format json`, one object per line (status, share, block, summary), checked
