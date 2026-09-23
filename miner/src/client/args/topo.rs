@@ -94,9 +94,14 @@ impl Topology {
     /// 8745HS, reproducibly. Taking CPUs in plain id order instead would double-book the
     /// first cores whenever fewer workers than CPUs are asked for.
     pub fn spread(&self) -> Vec<usize> {
-        let Some(cores) = self.cores() else {
+        let Some(mut cores) = self.cores() else {
             return self.cpus.iter().map(|c| c.id).collect();
         };
+        // Faster cores first: on a phone the big cores often carry the highest ids,
+        // and a miner asked for fewer threads than CPUs should get them. The sort is
+        // stable, so a machine without core classes keeps plain id order.
+        let class_of = |id: usize| self.cpus.iter().find(|c| c.id == id).and_then(|c| c.class);
+        cores.sort_by_key(|core| std::cmp::Reverse(core.first().and_then(|&id| class_of(id))));
         let deepest = cores.iter().map(|c| c.len()).max().unwrap_or(0);
         let mut out = Vec::with_capacity(self.cpus.len());
         for rank in 0..deepest {
@@ -292,7 +297,7 @@ pub fn fmt_list(v: &[usize]) -> String {
     out.join(",")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn read_platform() -> Topology {
     let mut t = Topology {
         model: read_model_linux(),
@@ -311,8 +316,23 @@ fn read_platform() -> Topology {
         return t;
     }
 
-    let p_cores = read_range_file("/sys/devices/cpu_core/cpus");
-    let e_cores = read_range_file("/sys/devices/cpu_atom/cpus");
+    let mut p_cores = read_range_file("/sys/devices/cpu_core/cpus");
+    let mut e_cores = read_range_file("/sys/devices/cpu_atom/cpus");
+    if p_cores.is_empty() && e_cores.is_empty() {
+        // ARM big.LITTLE (phones, most Android): no hybrid PMU files, but each CPU
+        // states its relative capacity, 1024 for the fastest.
+        let caps: Vec<(usize, u32)> = online
+            .iter()
+            .filter_map(|&id| {
+                let c = read_i32(&format!("/sys/devices/system/cpu/cpu{id}/cpu_capacity"))?;
+                Some((id, u32::try_from(c).ok()?))
+            })
+            .collect();
+        if let Some((fast, slow)) = split_by_capacity(&caps) {
+            p_cores = fast;
+            e_cores = slow;
+        }
+    }
 
     for id in online {
         let base = format!("/sys/devices/system/cpu/cpu{id}");
@@ -336,12 +356,20 @@ fn read_platform() -> Topology {
     t
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn read_model_linux() -> String {
     let Ok(s) = std::fs::read_to_string("/proc/cpuinfo") else { return String::new() };
-    for line in s.lines() {
-        if let Some(v) = line.strip_prefix("model name") {
-            if let Some((_, v)) = v.split_once(':') {
+    model_from_cpuinfo(&s)
+}
+
+/// The processor's name from /proc/cpuinfo. x86 kernels write `model name`; ARM
+/// kernels (Android among them) write `Hardware`, or an old-style `Processor`.
+#[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+fn model_from_cpuinfo(s: &str) -> String {
+    for key in ["model name", "Hardware", "Processor"] {
+        for line in s.lines() {
+            let Some((k, v)) = line.split_once(':') else { continue };
+            if k.trim() == key && !v.trim().is_empty() {
                 return v.trim().to_string();
             }
         }
@@ -349,7 +377,21 @@ fn read_model_linux() -> String {
     String::new()
 }
 
-#[cfg(target_os = "linux")]
+/// Splits CPUs into the fastest class and the rest by their `cpu_capacity`. `None`
+/// when every CPU reports the same capacity, or none does: nothing to split.
+#[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+fn split_by_capacity(caps: &[(usize, u32)]) -> Option<(Vec<usize>, Vec<usize>)> {
+    let max = caps.iter().map(|c| c.1).max()?;
+    let min = caps.iter().map(|c| c.1).min()?;
+    if max == min {
+        return None;
+    }
+    let fast = caps.iter().filter(|c| c.1 == max).map(|c| c.0).collect();
+    let slow = caps.iter().filter(|c| c.1 < max).map(|c| c.0).collect();
+    Some((fast, slow))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn read_l2_linux(base: &str) -> (Option<u32>, Option<usize>) {
     for i in 0..8 {
         let dir = format!("{base}/cache/index{i}");
@@ -366,12 +408,12 @@ fn read_l2_linux(base: &str) -> (Option<u32>, Option<usize>) {
     (None, None)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn read_i32(path: &str) -> Option<i32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn read_range_file(path: &str) -> Vec<usize> {
     match std::fs::read_to_string(path) {
         Ok(s) => parse_range_list(s.trim()),
@@ -379,7 +421,7 @@ fn read_range_file(path: &str) -> Vec<usize> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn parse_range_list(s: &str) -> Vec<usize> {
     let mut out = Vec::new();
     for part in s.split(',').filter(|p| !p.is_empty()) {
@@ -569,7 +611,12 @@ fn read_platform() -> Topology {
     t
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "macos"
+)))]
 fn read_platform() -> Topology {
     Topology {
         model: String::new(),
@@ -593,6 +640,39 @@ mod tests {
 
     fn topo(cpus: Vec<Cpu>) -> Topology {
         Topology { model: String::new(), cpus, source: "test", notes: Vec::new() }
+    }
+
+    #[test]
+    fn a_phone_splits_into_its_big_and_little_cores_by_capacity() {
+        // A Snapdragon 732G (the Poco X3): two Cortex-A76 at full capacity, six
+        // Cortex-A55 at well under half of it.
+        let caps: Vec<(usize, u32)> =
+            (0..6).map(|id| (id, 423)).chain((6..8).map(|id| (id, 1024))).collect();
+        let (fast, slow) = split_by_capacity(&caps).expect("two classes");
+        assert_eq!(fast, [6, 7]);
+        assert_eq!(slow, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(split_by_capacity(&[(0, 1024), (1, 1024)]), None, "one class, nothing to split");
+        assert_eq!(split_by_capacity(&[]), None);
+    }
+
+    #[test]
+    fn spread_puts_the_big_cores_first() {
+        // Little cluster: package 0, cores 0-5; big cluster: package 1, cores 0-1.
+        let mut cpus: Vec<Cpu> = (0..6).map(|id| cpu(id, 0, id as i32, Some(0))).collect();
+        cpus.extend((6..8).map(|id| cpu(id, 1, id as i32 - 6, Some(1))));
+        assert_eq!(topo(cpus).spread(), [6, 7, 0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn the_model_is_read_from_x86_and_arm_cpuinfo_alike() {
+        let x86 = "processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD Ryzen 7 8745HS\n";
+        assert_eq!(model_from_cpuinfo(x86), "AMD Ryzen 7 8745HS");
+        let android = "processor\t: 0\nBogoMIPS\t: 38.40\nFeatures\t: fp asimd\n\
+                       CPU implementer\t: 0x51\n\nHardware\t: Qualcomm Technologies, Inc SM7150\n";
+        assert_eq!(model_from_cpuinfo(android), "Qualcomm Technologies, Inc SM7150");
+        assert_eq!(model_from_cpuinfo("Processor\t: AArch64 Processor rev 13 (aarch64)\n"),
+            "AArch64 Processor rev 13 (aarch64)");
+        assert_eq!(model_from_cpuinfo(""), "");
     }
 
     #[test]
