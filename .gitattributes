@@ -1,0 +1,4 @@
+# Shell scripts must keep LF even on a Windows checkout with core.autocrlf:
+# bash reads each CRLF line as a command with a trailing carriage return and
+# fails on the first one.
+*.sh text eol=lf
