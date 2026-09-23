@@ -55,7 +55,7 @@ in [CHANGELOG.md](CHANGELOG.md).
   `tx_sendRaw` through the mempool into both parties' histories, and found again after a
   restart. Upstream's end-to-end tests mine a few blocks; none spends a mined reward.
 - `scripts/check.sh`: every check a commit must pass, in one command, instead of CI.
-- `wallet-gui/`: the start of the desktop wallet, in its own workspace.
+- `wallet-gui/`: the desktop wallet, in its own workspace; see `wallet-gui/README.md`.
 
 ## What the fork changes on purpose
 

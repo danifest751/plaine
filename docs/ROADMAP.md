@@ -357,7 +357,14 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   upstream's wallet (`kdf: none` and `blake3-iter-v1`, kept as fixtures) open unchanged
   and move to argon2id with the same address; a relabelled or cheapened file is caught
   by the MAC. The owner's mining key (`kdf: none`) was checked to open with both builds.
-- [ ] Phase 3
+- [ ] Phase 3 — in progress. The first version runs: start (open, create with argon2id,
+  restore from backup), unlock, Home, Send with a confirmation screen, History with
+  paging and the upstream-node fallback, Settings (node, token, auto-lock, a protected
+  copy of the key, the backup behind the passphrase). Node calls run on a worker thread.
+  21 headless tests (`egui_kittest`) and model tests, a separation test for the lock
+  file. Checked by hand against a synced indexing node: the owner's address shows its
+  14 incoming pool payouts. Still to do: QR code, and the end-to-end run against a
+  real node (phase 4).
 - [ ] Phase 4
 - [ ] Phase 5
 - [ ] Phase 6
