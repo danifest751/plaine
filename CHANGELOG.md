@@ -7,6 +7,12 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Wallet: `plaine_wallet::api`, the wallet as a library for the desktop wallet: create,
+  import and open a key, sign a transfer, print the backup string, change the
+  passphrase, parse amounts and check addresses, with nothing written to a terminal.
+  Advice the CLI prints comes back as `Notice` values. The CLI now runs on it; its output
+  is unchanged. One difference: `transfer` now checks that the decrypted seed reproduces
+  the key file's public key before signing, as `verify` always did.
 - `docs/rpc.md`: a reference for all 19 RPC methods: transport rules, parameters, result
   fields, errors and examples, checked against a running node. `lib/rpc/tests/reference_doc.rs`
   fails when the method list and the reference drift apart.

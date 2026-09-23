@@ -182,6 +182,15 @@ wallet-gui/                  its own [workspace], like miner/
   surface.
 - **RPC client:** a minimal HTTP/1.1 client over `std::net` for a local node. Requests run
   on a background thread; the UI never blocks.
+- **Works with any node, upstream's included.** Consensus is unchanged, so balance,
+  sending and pending transactions work against an upstream `plaine-noded`. What an
+  older node or one without `addrindex` cannot answer degrades instead of failing: the
+  GUI probes `account_getHistory` once and, on "method not found" or "feature disabled",
+  shows the history of the wallet's own sends from a sent-transfer log it keeps beside
+  the key file (the CLI's journal records announcements only), each confirmed once the
+  account nonce has moved past it and it is gone from the mempool, says incoming
+  transfers need a node with `addrindex = true`, and falls back to the relay floor for
+  fees. A test runs the model against a mock shaped like upstream's node.
 - A separation test, like `node_separation.rs`: the node's and the wallet's lock files
   contain no egui.
 
@@ -337,7 +346,10 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   after a restart, a note's `time`, `chainwork` below the tip.
   1.5 done: `fee_suggest` reads the transfer fees of the last 240 blocks, cached per tip;
   checked by unit tests and by the transfer end-to-end run.
-- [ ] Phase 2
+- [ ] Phase 2 — in progress. 2.1 done: `plaine_wallet::api` creates, imports, opens,
+  signs, backs up and re-wraps keys without printing, and returns advice as `Notice`s;
+  the CLI runs on it with unchanged output (its 141 tests pass as before) and
+  `wallet/tests/api.rs` covers the library face. 2.2 waits on the KDF decision.
 - [ ] Phase 3
 - [ ] Phase 4
 - [ ] Phase 5
