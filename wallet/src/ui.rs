@@ -201,25 +201,12 @@ fn decode_and_check(
     s: &mut Streams,
     restoring: bool,
 ) -> Result<crate::secret::Secret32> {
-    let (seed, source) = crate::sechex::decode_backup(text)?;
-    if source == crate::sechex::SeedSource::Unchecked {
-        if restoring {
-            return Err(WalletError::refused(
-                "this is 64 bare hex digits, not the 68-digit checksummed string that \
-                 `backup` prints, so nothing here can catch a one-character slip, and a \
-                 slip restores a different, empty wallet. Paste the whole backup line, \
-                 checksum included. If this really is raw entropy or a backup from before \
-                 checksums existed, use `new` with the same flags; it takes either form \
-                 and produces the identical key file.",
-            ));
+    let (seed, notice) = crate::api::decode_seed_text(text, restoring)?;
+    if let Some(n) = notice {
+        for line in n.lines() {
+            s.warn(&line);
         }
-        s.warn(
-            "note: this seed carries no checksum (64 digits, not 68), so nothing verified \
-             the transcription. Check the address printed below against the one you \
-             expect before you send anything to it.",
-        );
     }
-    crate::secret::check_seed_material(seed.expose())?;
     Ok(seed)
 }
 
