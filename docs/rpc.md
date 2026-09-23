@@ -636,7 +636,9 @@ curl -s http://127.0.0.1:9257 -H 'Content-Type: application/json' \
 
 ## `fee_suggest`
 
-Suggested transaction fees, in mile per transaction.
+Suggested transaction fees, in mile per transaction, from the fees transfers actually paid
+in the last 240 blocks. A wallet offers `p50Mile` by default, `p10Mile` when time does not
+matter and `p90Mile` to be included sooner.
 
 ### Parameters
 
@@ -646,14 +648,17 @@ None.
 
 | field | type | notes |
 |---|---|---|
-| `blocksSampled` | integer | blocks the percentiles were computed from |
-| `p10Mile` | string | 10th-percentile fee |
-| `p50Mile` | string | median fee |
-| `p90Mile` | string | 90th-percentile fee |
+| `blocksSampled` | integer | blocks read, up to 240 back from the tip; fewer on a young chain, or on a pruned node whose bodies stop sooner |
+| `p10Mile` | string | 10th-percentile transfer fee |
+| `p50Mile` | string | median transfer fee |
+| `p90Mile` | string | 90th-percentile transfer fee |
 | `relayFloorMile` | string | this node's relay floor, the least it will accept |
 
-plaine-noded does not yet sample blocks: `blocksSampled` is 0 and all four amounts equal
-the relay floor.
+Percentiles are nearest-rank over every transfer in the sampled blocks; coinbases and
+announcements do not count. None is below `relayFloorMile`, since a lower fee would be
+refused here, and with no transfers in the window all three equal it. The answer is
+computed once per tip and cached until the tip moves. Before this fork the node sampled
+nothing and always returned the floor.
 
 ### Errors
 
@@ -668,7 +673,7 @@ curl -s http://127.0.0.1:9257 -H 'Content-Type: application/json' \
 
 ```json
 {"jsonrpc":"2.0","result":{
-  "blocksSampled":0,"p10Mile":"1","p50Mile":"1","p90Mile":"1","relayFloorMile":"1"},"id":1}
+  "blocksSampled":240,"p10Mile":"1","p50Mile":"10","p90Mile":"250","relayFloorMile":"1"},"id":1}
 ```
 
 ---

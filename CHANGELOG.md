@@ -36,6 +36,9 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Fixed
 
+- Node: `fee_suggest` sampled no blocks and returned the relay floor as every percentile.
+  It now takes nearest-rank percentiles of the transfer fees in the last 240 blocks (the
+  window SPEC §14 names), never below the relay floor, computed once per tip.
 - Node: after a reorg, `author_getNotes` lost the announcements of the branch it had just
   applied: their notes were added and then removed by the rollback meant for the orphaned
   blocks. The rollback now runs first.

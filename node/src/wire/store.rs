@@ -740,6 +740,27 @@ pub(crate) mod tests {
         (dir, c, r)
     }
 
+    /// A store whose best chain is `blocks` (height, hash, body), all still in the ring.
+    pub(crate) fn store_with_ring(
+        blocks: Vec<(u64, Hash32, Vec<u8>)>,
+    ) -> (std::path::PathBuf, plaine_storage::Committer, NodeStore) {
+        let (dir, committer, reader) = temp_store();
+        let ring = new_ring();
+        let store = NodeStore::new(reader, Arc::clone(&ring));
+        for (height, hash, body) in blocks {
+            ring.write().expect("ring").push(Entry {
+                height,
+                hash,
+                header: [0u8; HEADER_BYTES],
+                body,
+                deltas: Vec::new(),
+                undo: Vec::new(),
+                issued_delta: 0,
+            });
+        }
+        (dir, committer, store)
+    }
+
     /// A store whose best chain holds a one-coinbase block `canonical` at `height`
     /// (still in the ring), and whose side-header table holds `side` at the same
     /// height: the shape a fork leaves behind.
