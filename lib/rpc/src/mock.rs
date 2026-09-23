@@ -5,7 +5,7 @@ use crate::views::{
     AccountRecord, Address20, AuthorKeyStatus, AuthorNote, AuthorNotesPage, BlockRecord, BudgetView,
     Budgets, ChainInfo, ChainView, CheckpointLink, CheckpointStatus, CheckpointSubmit,
     EmissionAudit, FeeSuggestion,
-    Hash32, HeaderRecord, KeySource, MempoolInfo, MempoolView, NetView, Network, Node, NotesCursor,
+    Hash32, HeaderRecord, HistoryEntry, HistoryLookup, KeySource, MempoolInfo, MempoolView, NetView, Network, Node, NotesCursor,
     PeerInfo, PolicyView, StratumSession, StratumView, SubmitError, SyncStatus, TxLookup, TxRecord,
     Verbosity,
 };
@@ -28,6 +28,8 @@ pub struct MockNode {
     checkpoint_link: CheckpointLink,
     checkpoint_submit: CheckpointSubmit,
     author_status: Option<AuthorKeyStatus>,
+    // None: the node runs without addrindex.
+    history: Option<(u64, Vec<HistoryEntry>)>,
 }
 
 impl MockNode {
@@ -56,6 +58,7 @@ impl MockNode {
                 enforcing: true,
             },
             author_status: None,
+            history: None,
         }
     }
 
@@ -178,6 +181,12 @@ impl MockNode {
 
     pub fn with_checkpoint_submit(mut self, out: CheckpointSubmit) -> MockNode {
         self.checkpoint_submit = out;
+        self
+    }
+
+    /// Runs with addrindex from `indexed_from`, holding `entries` in any order.
+    pub fn with_history(mut self, indexed_from: u64, entries: Vec<HistoryEntry>) -> MockNode {
+        self.history = Some((indexed_from, entries));
         self
     }
 
@@ -347,6 +356,27 @@ impl ChainView for MockNode {
             max_supply_mile: None,
             subsidy_at_height_mile: plaine_consensus::emission::block_reward(height),
         })
+    }
+
+    fn account_history(
+        &self,
+        addr: &Address20,
+        before: Option<(u64, u16)>,
+        limit: usize,
+    ) -> HistoryLookup {
+        let Some((indexed_from, all)) = &self.history else {
+            return HistoryLookup::NotIndexed;
+        };
+        let _ = addr;
+        let mut sorted: Vec<&HistoryEntry> = all
+            .iter()
+            .filter(|e| before.is_none_or(|b| (e.height, e.index) < b))
+            .collect();
+        sorted.sort_by_key(|e| core::cmp::Reverse((e.height, e.index)));
+        let more = sorted.len() > limit;
+        let entries: Vec<HistoryEntry> = sorted.into_iter().take(limit).cloned().collect();
+        let next_cursor = if more { entries.last().map(|e| (e.height, e.index)) } else { None };
+        HistoryLookup::Page { indexed_from: *indexed_from, entries, next_cursor, unavailable_below: None }
     }
 
     fn author_notes(&self, cursor: NotesCursor, limit: usize) -> AuthorNotesPage {

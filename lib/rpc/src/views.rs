@@ -392,6 +392,57 @@ impl SubmitError {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryKind {
+    Coinbase,
+    Transfer,
+    Announcement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    In,
+    Out,
+    /// A transfer from the address to itself.
+    SelfTransfer,
+}
+
+/// One confirmed transaction that touches an address, from that address's side.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub txid: Hash32,
+    pub height: u64,
+    pub index: u16,
+    pub time: u64,
+    pub confirmations: u64,
+    pub kind: HistoryKind,
+    pub direction: Direction,
+    /// Value credited to or debited from the address: the coinbase credit, the
+    /// transfer amount, or 0 for an announcement.
+    pub amount_mile: u128,
+    /// Fee paid by the sender; 0 for a coinbase.
+    pub fee_mile: u128,
+    /// The other party of a transfer; `None` for a coinbase or an announcement.
+    pub counterparty: Option<Address20>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryLookup {
+    /// The node runs without `addrindex`.
+    NotIndexed,
+    Page {
+        indexed_from: u64,
+        /// Newest first.
+        entries: Vec<HistoryEntry>,
+        /// Position to resume from, strictly older; `None` when this page reached the
+        /// oldest indexed entry.
+        next_cursor: Option<(u64, u16)>,
+        /// Set when some entries were skipped because their block bodies are no
+        /// longer stored (pruned): the history below this height is incomplete.
+        unavailable_below: Option<u64>,
+    },
+}
+
 pub trait ChainView: Send + Sync {
     fn info(&self) -> ChainInfo;
 
@@ -415,6 +466,18 @@ pub trait ChainView: Send + Sync {
     fn emission_audit(&self, height: u64) -> Option<EmissionAudit>;
 
     fn author_notes(&self, cursor: NotesCursor, limit: usize) -> AuthorNotesPage;
+
+    /// Confirmed transactions touching `addr`, newest first, strictly older than
+    /// `before` when given.
+    fn account_history(
+        &self,
+        addr: &Address20,
+        before: Option<(u64, u16)>,
+        limit: usize,
+    ) -> HistoryLookup {
+        let _ = (addr, before, limit);
+        HistoryLookup::NotIndexed
+    }
 }
 
 pub trait MempoolView: Send + Sync {
