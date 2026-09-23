@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod bench;
 pub mod clock;
 pub mod conf;
@@ -40,6 +41,8 @@ pub struct Options {
     pub pages: Ask,
     pub bench_secs: u64,
     pub config_path: Option<String>,
+    /// An explicit --batch N. None means the machine decides; see `args::batch`.
+    pub batch: Option<usize>,
 }
 
 impl Default for Options {
@@ -52,6 +55,7 @@ impl Default for Options {
             pages: Ask::Auto,
             bench_secs: DEFAULT_BENCH_SECS,
             config_path: None,
+            batch: None,
         }
     }
 }
@@ -73,6 +77,7 @@ pub struct Partial {
     pub verbose: Option<bool>,
     pub bench: Option<bool>,
     pub bench_secs: Option<u64>,
+    pub batch: Option<usize>,
     pub print_topology: Option<bool>,
     pub grind: Option<String>,
     pub config: Option<String>,
@@ -98,6 +103,7 @@ impl Partial {
             verbose: self.verbose.or(lower.verbose),
             bench: self.bench.or(lower.bench),
             bench_secs: self.bench_secs.or(lower.bench_secs),
+            batch: self.batch.or(lower.batch),
             print_topology: self.print_topology.or(lower.print_topology),
             grind: self.grind.or(lower.grind),
             config: self.config.or(lower.config),
@@ -243,6 +249,7 @@ fn resolve(
         pages: p.pages.unwrap_or_default(),
         bench_secs,
         config_path,
+        batch: p.batch,
     })
 }
 
@@ -298,6 +305,12 @@ fn parse_argv(argv: &[String]) -> Result<Partial, String> {
                     ));
                 }
                 p.priority = Some(n as u8);
+            }
+            "--batch" => {
+                let v = value("a slot count")?;
+                p.batch = Some(batch::check(
+                    int(&v, "--batch needs a positive integer")? as usize,
+                )?);
             }
             "--huge-pages" => p.pages = Some(Ask::Force),
             "--no-huge-pages" => p.pages = Some(Ask::Never),
@@ -387,6 +400,7 @@ fn from_config(pairs: &[(String, conf::Value)]) -> Result<Partial, String> {
             "address" => p.login = Some(text()?),
             "stratum" => p.stratum = Some(text()?),
             "threads" => p.threads = Some(num(u32::MAX as u64)? as usize),
+            "batch" => p.batch = Some(batch::check(num(u32::MAX as u64)? as usize)?),
             "cpu-affinity" => {
                 p.cpus = Some(match value {
                     Value::Str(s) => parse_cpu_list(s)?,

@@ -44,6 +44,11 @@ pub struct Args {
     pub silence_deadline_ms: u64,
     pub huge_pages: bool,
     pub pins: Option<Vec<(usize, u16)>>,
+    /// Nonces per W^X seal. The code region holds `sizes::BATCH`; this is how many of
+    /// its slots a worker fills before sealing. `main` sets it from the machine's L2
+    /// (see `args::batch`); this default only matters to callers that build `Args`
+    /// directly, such as tests.
+    pub batch: usize,
 }
 
 impl Default for Args {
@@ -62,6 +67,7 @@ impl Default for Args {
             silence_deadline_ms: SERVER_SILENCE_DEADLINE.as_millis() as u64,
             huge_pages: true,
             pins: None,
+            batch: BATCH,
         }
     }
 }
@@ -603,7 +609,8 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
                         );
                     }
 
-                    let (pads, err) = Pads::many(args.threads.max(1), BATCH, args.huge_pages);
+                    let batch = args.batch.clamp(1, BATCH);
+                    let (pads, err) = Pads::many(args.threads.max(1), batch, args.huge_pages);
                     if let Some(e) = err {
                         if pads.is_empty() {
                             break Ended::NoWorkers(format!(
@@ -625,6 +632,7 @@ pub fn session(args: &Args, start: Instant, totals: &mut Report) -> std::io::Res
                             tx.clone(),
                             p,
                             args.pins.as_ref().and_then(|q| q.get(i).copied()),
+                            batch,
                         ));
                     }
                     pad::log_startup(args.verbose);
@@ -850,6 +858,7 @@ fn spawn_worker(
     tx: mpsc::Sender<Solution>,
     mut pads: Pads,
     pin: Option<(usize, u16)>,
+    batch: usize,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("plaine-miner-{index}"))
@@ -873,10 +882,13 @@ fn spawn_worker(
                 }
             };
 
-            let mut nonces = [0u64; BATCH];
-            let mut headers = [[0u8; 132]; BATCH];
-            let mut seeds = [0u64; BATCH];
-            let mut digests = [0u64; BATCH];
+            // One slot per nonce in flight. `batch` is a runtime choice now, so these are
+            // heap vectors allocated once here, never inside the hash loop.
+            let batch = batch.clamp(1, BATCH).min(pads.len());
+            let mut nonces = vec![0u64; batch];
+            let mut headers = vec![[0u8; 132]; batch];
+            let mut seeds = vec![0u64; batch];
+            let mut digests = vec![0u64; batch];
             let mut counter: u64 = 0;
             let mut seen_generation = u64::MAX;
             let mut job: Option<Arc<JobView>> = None;
@@ -897,7 +909,7 @@ fn spawn_worker(
                     continue;
                 };
 
-                for s in 0..BATCH {
+                for s in 0..batch {
                     // worker index in the top cbits, counter below: disjoint nonce lanes per worker.
                     let x = ((index as u64) << cbits) | (counter & cmask);
                     counter = counter.wrapping_add(1);
@@ -914,9 +926,9 @@ fn spawn_worker(
                     eprintln!("plaine-miner: worker {index} JIT failure, stopping");
                     return;
                 }
-                shared.add_hashes_from(index, BATCH as u64);
+                shared.add_hashes_from(index, batch as u64);
 
-                for s in 0..BATCH {
+                for s in 0..batch {
                     let h = pow::pow_hash(&headers[s], digests[s]);
                     if h <= j.target {
                         let sol = Solution {
@@ -1300,7 +1312,7 @@ fn clean_keeps_displaced_job_for_grace() {
             live: true,
         });
         let pads = Pads::new(BATCH, true).expect("map this worker's pads");
-        let workers = vec![spawn_worker(0, Arc::clone(&shared), tx, pads, None)];
+        let workers = vec![spawn_worker(0, Arc::clone(&shared), tx, pads, None, BATCH)];
         assert!(!all_workers_stopped(&workers), "a worker that is mining has not stopped");
 
         drop(rx);
@@ -1366,7 +1378,7 @@ fn clean_keeps_displaced_job_for_grace() {
         let mut handles = Vec::new();
         for i in 0..2 {
             let pads = Pads::new(BATCH, true).expect("map this worker's pads");
-            handles.push(spawn_worker(i, Arc::clone(&shared), tx.clone(), pads, None));
+            handles.push(spawn_worker(i, Arc::clone(&shared), tx.clone(), pads, None, BATCH));
         }
         drop(tx);
 
@@ -1453,7 +1465,7 @@ fn clean_keeps_displaced_job_for_grace() {
 
         shared.publish(job(0));
         let pads = Pads::new(BATCH, true).expect("map this worker's pads");
-        let h = spawn_worker(0, Arc::clone(&shared), tx, pads, None);
+        let h = spawn_worker(0, Arc::clone(&shared), tx, pads, None, BATCH);
 
         let take = |rx: &mpsc::Receiver<Solution>, n: usize| -> Vec<u64> {
             let mut out = Vec::new();

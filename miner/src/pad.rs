@@ -6,7 +6,9 @@ use plaine_pow::{Isochron, Scratch, SCRATCH_BYTES, SCRATCH_WORDS};
 
 const PAD_ALIGN: usize = 65_536;
 
-const PAD_BYTES: usize = SCRATCH_BYTES as usize;
+/// One scratchpad. Public because the batch heuristic sizes a worker's pad working
+/// set against L2 (see `client::args::batch`).
+pub const PAD_BYTES: usize = SCRATCH_BYTES as usize;
 
 // one pad == one 64 KiB alignment unit, so no two pads ever share a page.
 const _: () = assert!(PAD_BYTES == PAD_ALIGN);
