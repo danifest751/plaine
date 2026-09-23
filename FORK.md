@@ -176,6 +176,11 @@ README's quick start writes the key to, nor the passphrase files the README docu
   of `node_getBudgets` return 0 or empty instead of an error.
 - **Placeholders in answers.** A transaction's `decoded` is always `null`, and
   `chain_getBlockByHeight` at verbosity 2 returns an empty `txs`.
+- **A miner reconnecting to a fresh local node.** Once, in a full check run, the miner
+  started by the desktop wallet was seen reconnecting to a fresh test node a few seconds
+  after its first accepted shares; the node's log at `info` level gives no reason, and
+  five further runs did not repeat it. The end-to-end test now waits for the session to
+  log in again rather than reading it once.
 - **The committer after a failed apply.** While building the address index, an error
   returned half-way through applying a block left the storage committer unable to shut
   down (a test hung on drop). The fork checks a block's body before writing anything, so

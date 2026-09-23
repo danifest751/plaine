@@ -308,17 +308,30 @@ fn the_mining_tab_mines_to_the_wallet_and_shows_accepted_shares() {
     };
     assert!(accepted >= 2);
 
-    // The node sees the wallet's worker, paying to the wallet's address.
-    let sessions = http().call("stratum_getSessions", json!([])).unwrap();
+    // The node sees the wallet's worker, paying to the wallet's address. A session
+    // can be caught between a reconnect and its login, so this waits for one.
     let worker = format!("{address}.gui");
-    assert!(
-        sessions
+    let t0 = Instant::now();
+    loop {
+        let sessions = http().call("stratum_getSessions", json!([])).unwrap();
+        let seen = sessions
             .as_array()
             .unwrap()
             .iter()
-            .any(|s| s["worker"] == worker.as_str()),
-        "{sessions}"
-    );
+            .any(|s| s["worker"] == worker.as_str() && s["authorized"] == true);
+        if seen {
+            break;
+        }
+        if t0.elapsed() > Duration::from_secs(20) {
+            h.run();
+            let miner_said: Vec<String> = h
+                .query_all_by_label_contains("miner: ")
+                .filter_map(|n| n.value())
+                .collect();
+            panic!("the wallet's worker never logged in: {sessions}; {miner_said:?}");
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 
     click(&mut h, "Stop mining");
     h.get_by_label("Start mining");
