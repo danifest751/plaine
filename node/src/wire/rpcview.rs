@@ -616,6 +616,51 @@ pub struct RpcMempool {
     pub tx: tokio::sync::mpsc::Sender<Cmd>,
     pub relay_fee_mile: u128,
     pub max_txs: usize,
+    pub store: Arc<NodeStore>,
+    pub tip: TipCell,
+    /// The last suggestion and the tip it was computed at; recomputed when the tip moves.
+    pub fee_cache: Mutex<Option<(Hash32, FeeSuggestion)>>,
+}
+
+/// Blocks `fee_suggest` samples: SPEC §14's "last 240 blocks", four hours at 60 s.
+pub const FEE_SAMPLE_BLOCKS: u64 = 240;
+
+/// The fees of the transfers in the `count` blocks up to `tip`, and how many blocks
+/// were read. Stops at the first body the store no longer holds (a pruned node).
+fn sample_transfer_fees(store: &NodeStore, tip: u64, count: u64) -> (u64, Vec<u128>) {
+    let mut fees = Vec::new();
+    let mut blocks = 0;
+    for h in (tip.saturating_sub(count.saturating_sub(1))..=tip).rev() {
+        let Some(raw) = store.body_at_verified(h) else { break };
+        blocks += 1;
+        let Ok(body) = plaine_consensus::codec::BlockBody::parse(&raw) else { continue };
+        for i in 0..body.len() {
+            if let Some(Ok(plaine_consensus::codec::Tx::Transfer(t))) = body.decode_tx(i) {
+                fees.push(t.fee);
+            }
+        }
+    }
+    (blocks, fees)
+}
+
+/// Nearest-rank percentiles of the sampled fees, never below the relay floor: a fee
+/// this node would refuse is no suggestion. With no transfers sampled, the floor.
+fn suggest_from(blocks: u64, fees: &mut [u128], floor: u128) -> FeeSuggestion {
+    fees.sort_unstable();
+    let pick = |p: usize| -> u128 {
+        if fees.is_empty() {
+            return floor;
+        }
+        let rank = (p * fees.len()).div_ceil(100).max(1);
+        fees[rank - 1].max(floor)
+    };
+    FeeSuggestion {
+        blocks_sampled: blocks,
+        p10_mile: pick(10),
+        p50_mile: pick(50),
+        p90_mile: pick(90),
+        relay_floor_mile: floor,
+    }
 }
 
 impl plaine_rpc::views::MempoolView for RpcMempool {
@@ -648,13 +693,18 @@ impl plaine_rpc::views::MempoolView for RpcMempool {
     }
 
     fn fee_suggest(&self) -> FeeSuggestion {
-        FeeSuggestion {
-            blocks_sampled: 0,
-            p10_mile: self.relay_fee_mile,
-            p50_mile: self.relay_fee_mile,
-            p90_mile: self.relay_fee_mile,
-            relay_floor_mile: self.relay_fee_mile,
+        let tip = self.tip.get();
+        if let Some((at, s)) = self.fee_cache.lock().ok().and_then(|g| *g) {
+            if at == tip.hash {
+                return s;
+            }
         }
+        let (blocks, mut fees) = sample_transfer_fees(&self.store, tip.height, FEE_SAMPLE_BLOCKS);
+        let s = suggest_from(blocks, &mut fees, self.relay_fee_mile);
+        if let Ok(mut g) = self.fee_cache.lock() {
+            *g = Some((tip.hash, s));
+        }
+        s
     }
 
     fn submit(&self, raw: &[u8]) -> Result<Hash32, SubmitError> {
@@ -1206,6 +1256,70 @@ mod tests {
         let p = ix.page(NotesCursor::Newest, 10, 5);
         assert_eq!(p.notes[0].payload, b"kept");
         assert_eq!(p.notes[0].seq, 0, "sequence numbers are compacted after a reorg");
+    }
+
+    #[test]
+    fn fee_percentiles_are_nearest_rank_and_never_below_the_floor() {
+        let s = suggest_from(240, &mut [], 7);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (7, 7, 7), "no transfers: the floor");
+        assert_eq!(s.blocks_sampled, 240);
+
+        let mut fees: Vec<u128> = (1..=100).rev().collect();
+        let s = suggest_from(3, &mut fees, 1);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (10, 50, 90));
+
+        let s = suggest_from(3, &mut [2, 40, 3], 5);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (5, 5, 40), "clamped to the floor");
+        assert_eq!(s.relay_floor_mile, 5);
+
+        let s = suggest_from(1, &mut [9], 1);
+        assert_eq!((s.p10_mile, s.p50_mile, s.p90_mile), (9, 9, 9), "one fee is every percentile");
+    }
+
+    fn body_with_fees(height: u64, fees: &[u128]) -> Vec<u8> {
+        use plaine_consensus::codec::{AuthorNote, BlockBody, CoinbaseTx, TransferTx};
+        let cb = CoinbaseTx {
+            height,
+            to: [0x77; 20],
+            reward: plaine_consensus::emission::block_reward(height),
+            fees: fees.iter().sum(),
+            note: AuthorNote { encoding: 0x01, payload: Vec::new() },
+        };
+        let mut recs = vec![cb.encode().expect("coinbase")];
+        for (n, &fee) in fees.iter().enumerate() {
+            let t = TransferTx {
+                from_pub: [n as u8 + 1; 32],
+                to: [0x22; 20],
+                amount: 1_000,
+                fee,
+                nonce: 0,
+                sig: [0u8; 64],
+            };
+            recs.push(t.encode().to_vec());
+        }
+        let refs: Vec<&[u8]> = recs.iter().map(|r| r.as_slice()).collect();
+        BlockBody::encode(&refs).expect("body")
+    }
+
+    #[test]
+    fn fee_sampling_reads_transfers_back_from_the_tip_and_stops_at_a_gap() {
+        // Heights 10 and 12..=14 are held; 11 is missing, as below a pruning horizon.
+        let blocks = vec![
+            (10, [10u8; 32], body_with_fees(10, &[1_000_000])),
+            (12, [12u8; 32], body_with_fees(12, &[5, 50])),
+            (13, [13u8; 32], body_with_fees(13, &[])),
+            (14, [14u8; 32], body_with_fees(14, &[7])),
+        ];
+        let (dir, _c, store) = crate::wire::store::tests::store_with_ring(blocks);
+
+        let (n, mut fees) = sample_transfer_fees(&store, 14, 240);
+        assert_eq!(n, 3, "14, 13, 12 are read; the gap at 11 ends the sample");
+        fees.sort_unstable();
+        assert_eq!(fees, [5, 7, 50], "only transfers count; block 10 is past the gap");
+
+        let (n, fees) = sample_transfer_fees(&store, 14, 2);
+        assert_eq!((n, fees.len()), (2, 1), "the window is `count` blocks: 14 and 13");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

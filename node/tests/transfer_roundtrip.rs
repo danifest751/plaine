@@ -116,6 +116,11 @@ fn a_transfer_is_followed_from_the_mempool_into_both_histories() {
     let paid = rpc_raw(RPC, "account_get", &format!("[\"{to}\"]"));
     assert_eq!(text(&paid, "balance").as_deref(), Some("150000"), "{paid}");
 
+    // The one transfer on the chain is what fee_suggest now has to go on.
+    let fees = rpc_raw(RPC, "fee_suggest", "[]");
+    assert!(num(&fees, "blocksSampled").is_some_and(|n| n > 1), "{fees}");
+    assert_eq!(text(&fees, "p50Mile"), Some(FEE_FLOOR_MILE.to_string()), "{fees}");
+
     // After a restart nothing is held in memory: the id alone is not enough
     // without txindex, and an address the transaction touches is.
     stop(&mut n);

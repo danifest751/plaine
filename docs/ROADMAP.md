@@ -327,6 +327,8 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   1.6, first part done: announcements survive a reorg, a side-branch hash no longer gets
   another block's body, and a pruned `tx_get` names pruning. Still open: announcements
   after a restart, a note's `time`, `chainwork` below the tip.
+  1.5 done: `fee_suggest` reads the transfer fees of the last 240 blocks, cached per tip;
+  checked by unit tests and by the transfer end-to-end run.
 - [ ] Phase 2
 - [ ] Phase 3
 - [ ] Phase 4
