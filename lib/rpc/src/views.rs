@@ -111,6 +111,11 @@ pub enum TxLocation {
 pub enum TxLookup {
     Found(TxRecord),
     Absent,
+    /// The txid index places it in the block at `height`, whose body a pruned
+    /// node no longer stores.
+    Pruned {
+        height: u64,
+    },
     NotIndexed {
         indexed_from: Option<u64>,
     },

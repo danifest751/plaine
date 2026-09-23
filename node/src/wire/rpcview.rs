@@ -67,6 +67,20 @@ impl NoteIndex {
         }
     }
 
+    /// A reorg onto `fork_height`: drop the notes of the orphaned blocks, then add
+    /// those of the applied ones. Adding first would have the rollback drop the new
+    /// branch's notes as well, since they sit above the fork too.
+    pub fn on_reorg<'a>(
+        &self,
+        fork_height: u64,
+        applied: impl IntoIterator<Item = (u64, Hash32, &'a [u8])>,
+    ) {
+        self.rollback_above(fork_height);
+        for (height, hash, body) in applied {
+            self.on_block(height, hash, body);
+        }
+    }
+
     fn page(&self, cursor: NotesCursor, limit: usize, tip: u64) -> AuthorNotesPage {
         let g = self.0.read().expect("note index");
         let total = g.len() as u64;
@@ -308,6 +322,11 @@ impl plaine_rpc::views::ChainView for RpcChain {
     fn block_by_hash(&self, hash: &Hash32, verbosity: Verbosity) -> Option<BlockRecord> {
         use plaine_chain::traits::Store;
         let r = self.store.header_by_hash(hash)?;
+        // Bodies are kept by height for the best chain only. A side-branch header
+        // has no body here: its height holds another block's.
+        if self.store.hash_at(r.height) != Some(*hash) {
+            return None;
+        }
         self.block_record(r, verbosity)
     }
 
@@ -385,7 +404,7 @@ impl plaine_rpc::views::ChainView for RpcChain {
             plaine_storage::TxLocation::Absent => TxLookup::Absent,
             plaine_storage::TxLocation::Found { height, index } => {
                 let Some(body_bytes) = self.store.body_at_verified(height) else {
-                    return TxLookup::NotIndexed { indexed_from: Some(height) };
+                    return TxLookup::Pruned { height };
                 };
                 let Ok(body) = plaine_consensus::codec::BlockBody::parse(&body_bytes) else {
                     return TxLookup::Absent;
@@ -907,6 +926,10 @@ mod tests {
             let (_c, reader) = crate::wire::store::tests::open_for_test(cfg);
             Arc::new(NodeStore::new(reader, crate::wire::store::new_ring()))
         }));
+        rpc_chain_on(store, v)
+    }
+
+    fn rpc_chain_on(store: Arc<NodeStore>, v: Option<crate::health::Observation>) -> RpcChain {
         let (tx, rx) = tokio::sync::mpsc::channel::<Cmd>(1);
         drop(rx);
         RpcChain {
@@ -1183,6 +1206,37 @@ mod tests {
         let p = ix.page(NotesCursor::Newest, 10, 5);
         assert_eq!(p.notes[0].payload, b"kept");
         assert_eq!(p.notes[0].seq, 0, "sequence numbers are compacted after a reorg");
+    }
+
+    #[test]
+    fn a_side_branch_hash_is_not_served_the_best_chain_body() {
+        use plaine_rpc::views::{ChainView, Verbosity};
+        let (best, side) = ([0x05; 32], [0xAB; 32]);
+        let (dir, _committer, store) = crate::wire::store::tests::store_with_fork(5, best, side);
+        let chain = rpc_chain_on(Arc::new(store), None);
+
+        let b = chain.block_by_hash(&best, Verbosity::HeaderAndTxids).expect("the best block");
+        assert_eq!(b.author_note, b"best");
+        assert!(chain.header_by_hash(&side).is_some(), "the side header itself is known");
+        assert!(
+            chain.block_by_hash(&side, Verbosity::HeaderAndTxids).is_none(),
+            "the body stored at height 5 belongs to another block"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_reorg_keeps_the_notes_of_the_branch_it_applies() {
+        let ix = NoteIndex::new();
+        ix.on_block(5, [0u8; 32], &note_body(&[b"kept"]));
+        ix.on_block(6, [1u8; 32], &note_body(&[b"orphaned"]));
+        let replacement = note_body(&[b"replacement"]);
+        let longer = note_body(&[b"on top"]);
+        ix.on_reorg(5, [(6, [2u8; 32], &replacement[..]), (7, [3u8; 32], &longer[..])]);
+        let p = ix.page(NotesCursor::Newest, 10, 7);
+        let payloads: Vec<&[u8]> = p.notes.iter().map(|n| n.payload.as_slice()).collect();
+        assert_eq!(payloads, [&b"on top"[..], b"replacement", b"kept"], "newest first");
+        assert_eq!(p.total, 3);
     }
 
     #[test]

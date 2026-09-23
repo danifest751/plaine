@@ -20,6 +20,7 @@ pub struct MockNode {
     sessions: Vec<StratumSession>,
     notes: Vec<AuthorNote>,
     txindex: bool,
+    tx_in_pruned_block: Option<u64>,
     pruned: bool,
     prune_horizon: u64,
     checkpoints_enabled: bool,
@@ -43,6 +44,7 @@ impl MockNode {
             sessions: Vec::new(),
             notes: Vec::new(),
             txindex: false,
+            tx_in_pruned_block: None,
             pruned: false,
             prune_horizon: 0,
             checkpoints_enabled: true,
@@ -195,6 +197,14 @@ impl MockNode {
         self
     }
 
+    /// With txindex: every lookup finds the transaction in a block at `height`
+    /// whose body is no longer stored.
+    pub fn with_tx_in_pruned_block(mut self, height: u64) -> MockNode {
+        self.txindex = true;
+        self.tx_in_pruned_block = Some(height);
+        self
+    }
+
     pub fn pruned_at(mut self, horizon: u64) -> MockNode {
         self.pruned = true;
         self.prune_horizon = horizon;
@@ -337,7 +347,9 @@ impl ChainView for MockNode {
     }
 
     fn tx(&self, _txid: &Hash32) -> TxLookup {
-        if self.txindex {
+        if let Some(height) = self.tx_in_pruned_block {
+            TxLookup::Pruned { height }
+        } else if self.txindex {
             TxLookup::Absent
         } else {
             TxLookup::NotIndexed { indexed_from: None }
