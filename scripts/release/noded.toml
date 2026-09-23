@@ -1,0 +1,17 @@
+# plaine-noded settings shipped with the release. Every key not set here keeps its
+# default; `plaine-noded --print-config` shows them all and where each came from.
+
+[node]
+# data_dir: empty means %APPDATA%\Plaine on Windows, ~/.plaine elsewhere.
+
+# Keep the per-address history the desktop wallet's History tab shows. It indexes
+# blocks as they are connected; on a node that already has a chain, sync into an
+# empty data directory to index the past.
+addrindex = true
+
+# Keep every block body, so the history reaches back to the start.
+prune = false
+
+[stratum]
+# This machine only. For miners on other machines: listen = "0.0.0.0:9258"
+# listen = "127.0.0.1:9258"
