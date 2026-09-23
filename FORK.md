@@ -51,13 +51,16 @@ in [CHANGELOG.md](CHANGELOG.md).
   first.
 - Android: the processor topology is read as on Linux, and cores get one class per
   `cpu_capacity` level (little, big, prime), so a phone's fastest cores are used first.
-  `scripts/build-android-static.sh` builds a static arm64 binary without the NDK; the
-  JIT's instruction-cache flush is done in the miner itself, so it needs no C runtime.
+  `scripts/build-android.sh` builds it with the NDK against Android's own libc (tested
+  with r28c and r28-beta3): it resolves host names, and mined to `eu.rplant.xyz` by name
+  with shares accepted. Without an NDK, `scripts/build-android-static.sh` builds a static
+  arm64 binary; the JIT's instruction-cache flush is done in the miner itself, so it
+  needs no C runtime.
   On a Poco X3 Pro (Snapdragon 860, Android 12) it passes the JIT self-check, benches
   3.85 kH/s on 6 threads, and mined to rplant.xyz at 4.8-5.0 kH/s with 7 of 8 shares
   accepted (the one refused was stale, after the pool went silent and the miner
-  reconnected). Such a static build cannot resolve host names on Android, which has no
-  `/etc/resolv.conf`: give the pool as an IP address.
+  reconnected). The static build cannot resolve host names on Android, which has no
+  `/etc/resolv.conf`: give it the pool as an IP address, or use the NDK build.
 - `--status-format json`: one JSON object per line on stdout (status, share, block,
   summary) for a program to read; the desktop wallet's Mining tab uses it.
 

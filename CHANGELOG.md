@@ -7,8 +7,10 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
-- Miner on Android phones: `scripts/build-android-static.sh` builds a static arm64
-  binary without the NDK. Tested on a Poco X3 Pro against rplant.xyz: 4.8-5.0 kH/s,
+- Miner on Android phones: `scripts/build-android.sh` builds it with the NDK against
+  Android's libc, resolving host names like any Android program;
+  `scripts/build-android-static.sh` builds a static arm64 binary without the NDK, which
+  needs the pool as an IP address. Tested on a Poco X3 Pro against rplant.xyz: 4.8-5.0 kH/s,
   shares accepted. Cores are classed per `cpu_capacity` level, so a phone with little,
   big and prime clusters pins to prime, then big, then little.
 - Desktop wallet: a Mining tab. It runs `plaine-miner` paying to the wallet's address, in
