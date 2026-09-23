@@ -319,3 +319,35 @@ fn a_protected_copy_opens_with_the_new_passphrase() {
         "the original stays until its owner removes it"
     );
 }
+
+#[test]
+fn a_node_that_is_down_is_said_so_and_the_key_still_opens() {
+    plaine_wallet_gui::kdf::install();
+    let dir = scratch("down");
+    let path = plain_key(&dir);
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .to_string();
+    let connect: Connect = Arc::new(move |_s: &Settings| {
+        Box::new(plaine_wallet_gui::rpc::HttpNode::new(closed.clone(), None)) as Box<dyn Transport>
+    });
+    let settings = Settings {
+        key_file: path.display().to_string(),
+        ..Settings::default()
+    };
+    let mut h = Harness::builder().with_size([900.0, 900.0]).build_ui_state(
+        |ui, app: &mut WalletApp| app.show(ui),
+        WalletApp::for_tests(settings, connect),
+    );
+    h.run();
+    click(&mut h, "Open");
+    assert!(h.state().is_open());
+    h.get_by_label_contains("Node: cannot reach the node");
+    click(&mut h, "Send");
+    fill(&mut h, "Recipient address", RECIPIENT);
+    fill(&mut h, "Amount (PLNE)", "1");
+    click(&mut h, "Review");
+    h.get_by_label_contains("waiting for the node");
+}

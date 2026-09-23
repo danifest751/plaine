@@ -7,6 +7,9 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 
 ### Added
 
+- Desktop wallet: an end-to-end test through the GUI against a real node and miner (two
+  keys, a matured coinbase, a transfer on the send screen, both histories, balances
+  against `emission_audit`), a Refresh button, and a test for a node that is down.
 - Desktop wallet, `wallet-gui/`: open, create (argon2id) or restore a key; balance and
   node state; send with a confirmation screen, the fee from `fee_suggest` and the nonce
   from `pendingNonce`; history with paging; settings for the node, the RPC token and
