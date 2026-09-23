@@ -70,8 +70,10 @@ maturity (60 blocks) and spends the reward.
 ## 3. Branches and process
 
 ```
-main        mirror of upstream/main, fast-forward only
-develop     integration: upstream plus everything in the fork; releases come from here
+main          the fork's stable branch and the repository's default; changes arrive
+              from develop through a pull request, after scripts/check.sh --e2e
+develop       integration: upstream plus everything in the fork
+upstream-main mirror of upstream/main, fast-forward only
 feature/*   new functionality  -> merged into develop
 fix/*       fixes              -> merged into develop
 pr/*        the commits behind the three PRs opened upstream earlier; no new ones
@@ -80,8 +82,10 @@ docs/*      documentation
 
 - Commit messages follow upstream: `area: what changed`; the body says why and how it was
   checked.
-- Syncing: `main` fast-forwards to upstream, then `develop` merges `main`; when upstream
-  fixes something the fork also fixed, upstream's version wins.
+- Syncing: `upstream-main` fast-forwards to upstream, then `develop` merges it; when
+  upstream fixes something the fork also fixed, upstream's version wins.
+- Releasing to `main`: a pull request from `develop` whose description lists what it
+  brings, merged with a merge commit once `scripts/check.sh --e2e` is green.
 - Fork versions are tags `v1.0.0-fork.N`; the log is `CHANGELOG.md` (Keep a Changelog).
 
 ---

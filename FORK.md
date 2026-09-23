@@ -189,8 +189,9 @@ Consensus rules, emission, checkpoints and the reorg limit are out of scope.
 
 | branch | purpose |
 |---|---|
-| `main` | mirror of `upstream/main`, fast-forward only |
-| `develop` | integration: upstream plus everything in this fork; releases are cut from here |
+| `main` | the fork's stable branch and the default; updated from `develop` by pull request |
+| `develop` | integration: upstream plus everything in this fork |
+| `upstream-main` | mirror of `upstream/main`, fast-forward only |
 | `feature/*`, `fix/*`, `docs/*` | work in progress, merged into `develop` |
 | `pr/*` | the commits behind upstream PRs #1–#3; no new ones are opened |
 

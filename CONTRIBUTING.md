@@ -63,9 +63,16 @@ Areas in use: `node`, `wallet`, `wallet-gui`, `miner`, `rpc`, `storage`, `docs`,
 
 ```
 git fetch upstream
-git checkout main && git merge --ff-only upstream/main
-git checkout develop && git merge main
+git checkout upstream-main && git merge --ff-only upstream/main
+git checkout develop && git merge upstream-main
 scripts/check.sh --e2e
 ```
 
 When upstream fixes something the fork also fixed, take upstream's version and drop ours.
+
+## Releasing to `main`
+
+`main` is the fork's stable branch and the repository's default. It moves only by a pull
+request from `develop`, opened once `scripts/check.sh --e2e` is green on `develop`. The
+description lists what the request brings, in the terms of `CHANGELOG.md`, and it is
+merged with a merge commit so the history of `develop` stays readable from `main`.
