@@ -54,12 +54,15 @@ maturity (60 blocks) and spends the reward.
    reorg limit do not change.
 2. **Upstream's rules are kept, not worked around.** Anything that would break them lives
    in a separate crate or workspace.
-3. **Whatever upstream could use is done separately.** Small commits on top of
-   `upstream/main`, each one proposable as its own PR.
+3. **Everything stays in this repository.** Nothing is proposed upstream: no issues, PRs
+   or comments beyond the three PRs already open. Whatever upstream could use is written
+   up in `FORK.md` instead — each defect with its symptom, cause, fix and test — so anyone
+   can take it from there.
 4. **Every change comes with** a test that fails without it, updated documentation and a
    `CHANGELOG.md` entry.
-5. **Load tests leave the machine usable.** Anything that mines in a test runs gently
-   (`--threads 2 --cpu-priority 0`); full power only for final measurements, and announced.
+5. **Load tests leave the machine usable.** Anything that mines in a test leaves two cores
+   free, and the check script runs at low priority; full power only for final
+   measurements, and announced.
 6. **English only.** Code, comments, documentation, commit messages and PRs.
 
 ---
@@ -71,7 +74,7 @@ main        mirror of upstream/main, fast-forward only
 develop     integration: upstream plus everything in the fork; releases come from here
 feature/*   new functionality  -> merged into develop
 fix/*       fixes              -> merged into develop
-pr/*        commits on top of upstream/main, proposed to noaltitude/plaine
+pr/*        the commits behind the three PRs opened upstream earlier; no new ones
 docs/*      documentation
 ```
 
@@ -115,9 +118,9 @@ history, index off); end-to-end on a real node (mine → the coinbase shows up i
 **1.2 Transaction status for the wallet.** "In the mempool / in block N / unknown" for the
 wallet's own transactions, without a full `txindex`: history plus `mempool_getBySender`.
 
-**1.3 Safe stratum default.** Proposal: `127.0.0.1:9258` for solo, `0.0.0.0` written
-explicitly in the config for pools, with a hint in the log. It changes a default, so an
-issue upstream comes first; the fork changes it only after that.
+**1.3 Safe stratum default.** `127.0.0.1:9258` by default, `0.0.0.0` written explicitly
+in the config for miners on other machines or a pool front-end, with a hint in the log.
+It changes a default, so `CHANGELOG.md` and `FORK.md` call it out for anyone upgrading.
 
 **1.4 RPC reference** — `docs/rpc.md`: parameters, response schemas, error codes, `curl`
 examples. A test checks that every method in `methods.rs` is documented.
@@ -128,7 +131,7 @@ blocks. The wallet's fee field needs real numbers: sample the transfers of the l
 fall back to the floor when there are none, and say how many blocks were sampled.
 
 **1.6 RPC defects found while writing the reference.** Each gets a failing test first, then
-the fix, then an upstream issue or PR:
+the fix, then an entry in `FORK.md`:
 
 - after a reorg, `author_getNotes` loses the announcements of the new branch: the notes of
   the applied blocks are added and then removed by the rollback that should precede them;
@@ -228,8 +231,8 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 
 | # | task |
 |---|---|
-| 5.1 | See PRs #1–#3 through upstream; if refused, keep the changes in `develop` |
-| 5.2 | Batch sizing and default pinning: an issue upstream first, with the measurements and a question whether they reproduce |
+| 5.1 | PRs #1–#3 stay open upstream as they are; their changes live in `develop` either way |
+| 5.2 | Batch sizing and default pinning: the measurements, and how to reproduce them, in `FORK.md` |
 | 5.3 | Android: `topo.rs` on `any(target_os = "linux", target_os = "android")`, plus a test |
 | 5.4 | Machine-readable status: `--status-format json`, one JSON line per tick, as the GUI's data source |
 | 5.5 | A Mining tab in the GUI: start and stop `plaine-miner` as a child process, "background" and "maximum" profiles, hash rate and shares from the JSON status, pool or solo |
@@ -263,7 +266,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 |---|---|---|
 | 1 | GUI framework | egui/eframe — decided: testable through kittest, one binary, no WebView |
 | 2 | KDF v2 on argon2id | yes if a new wallet dependency is acceptable; otherwise strong generated passphrases in the GUI |
-| 3 | Stratum on `127.0.0.1` by default | an issue upstream first |
+| 3 | Stratum on `127.0.0.1` by default | decided: changed in the fork, called out in `CHANGELOG.md` and `FORK.md` |
 | 4 | GUI licence | MIT, as upstream |
 | 5 | UI languages | English first; translations as separate resource files |
 
@@ -289,7 +292,7 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
 - [ ] documentation updated; a new RPC method goes into `docs/rpc.md`
 - [ ] a `CHANGELOG.md` entry
 - [ ] anything that mines in a test does so in the gentle profile
-- [ ] if upstream could use it, it is also on a `pr/*` branch
+- [ ] if it fixes something upstream also has, `FORK.md` describes it
 - [ ] everything is in English
 
 ---
@@ -323,7 +326,8 @@ under `scripts/check.sh --e2e`. The fast tests run on every commit.
   followed end to end (`transfer_roundtrip.rs`, under `check.sh --e2e`).
   1.4 done: `docs/rpc.md` covers all 19 methods, checked field by field against a running
   node; `reference_doc.rs` keeps it in step with the method list. Writing it turned up the
-  defects listed under 1.6. 1.3 waits on an upstream issue.
+  defects listed under 1.6. 1.3 done: stratum listens on loopback unless the config
+  opens it, and the log says how.
   1.6, first part done: announcements survive a reorg, a side-branch hash no longer gets
   another block's body, and a pruned `tx_get` names pruning. Still open: announcements
   after a restart, a note's `time`, `chainwork` below the tip.

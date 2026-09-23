@@ -34,6 +34,14 @@ Changes in this fork relative to [upstream](https://github.com/noaltitude/plaine
 - `.gitattributes`: shell scripts stay LF on Windows checkouts.
 - `FORK.md`, `CONTRIBUTING.md`, this changelog, and the roadmap in `docs/ROADMAP.md`.
 
+### Changed
+
+- Node: **the stratum server listens on `127.0.0.1:9258` by default**, not `0.0.0.0:9258`.
+  A node started with no config no longer opens its mining server to every network it is
+  on. Miners on other machines, or a pool front-end, need `[stratum] listen =
+  "0.0.0.0:9258"`; a node on loopback says so in its log at start-up. Configs that already
+  set `listen` are unaffected.
+
 ### Fixed
 
 - Node: `fee_suggest` sampled no blocks and returned the relay floor as every percentile.
