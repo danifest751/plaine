@@ -1081,6 +1081,15 @@ fn settings_tab(
             }
         }
     });
+    ui.add_space(10.0);
+    style::caption(
+        ui,
+        &format!(
+            "plaine-wallet-gui {}  -  {}",
+            env!("CARGO_PKG_VERSION"),
+            env!("PLAINE_BUILD_LINE")
+        ),
+    );
     (save, copy)
 }
 
