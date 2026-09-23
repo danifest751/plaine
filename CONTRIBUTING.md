@@ -41,6 +41,7 @@ change through; if a change needs to break one of them, it belongs in a separate
 - [ ] Anything that mines in a test does so gently: `--threads 2 --cpu-priority 0`.
 - [ ] If upstream could use it, it is also a single commit on top of `upstream/main` on a
       `pr/*` branch.
+- [ ] Everything in the repository is in English: code, comments, docs, commit messages.
 
 ## Commit messages
 

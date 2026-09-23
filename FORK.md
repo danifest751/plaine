@@ -5,8 +5,7 @@ It tracks upstream and adds a desktop wallet, the node and wallet work that wall
 and fixes to the reference miner. Consensus is not changed here: a block or transaction
 valid for upstream is valid for the fork and the other way round.
 
-The plan and its status are in [docs/ROADMAP.md](docs/ROADMAP.md) (Russian — it is the
-working plan of the maintainer). Everything meant for users and contributors is in English.
+The plan and its status are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What differs from upstream
 
