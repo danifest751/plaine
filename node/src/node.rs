@@ -728,6 +728,16 @@ pub fn start(cfg: &Config, paths: &Paths) -> Result<Node, StartError> {
             k::ADDRESS_HRP
         ),
     );
+    if stratum_addr.ip().is_loopback() {
+        log::info(
+            "stratum",
+            format!(
+                "only miners on this machine can connect; for other machines set \
+                 [stratum] listen = \"0.0.0.0:{}\"",
+                stratum_addr.port()
+            ),
+        );
+    }
 
     Ok(Node {
         tx,
